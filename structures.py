@@ -15,13 +15,20 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 import pandas as pd
 
 from curve_config import (
+    BBG_FWD_PREFIX,
+    BBG_FWD_SUFFIX,
     BBG_PREFIX,
     BBG_SUFFIX,
     CURVES,
     FLIES,
+    FWD_CURVES,
+    FWD_FLIES,
+    FWD_GROUPS,
     PREDICTED,
     CurveSpec,
     FlySpec,
+    FwdCurveSpec,
+    FwdFlySpec,
 )
 
 log = logging.getLogger(__name__)
@@ -33,43 +40,80 @@ _TENOR_RE = re.compile(
     rf"^{re.escape(BBG_PREFIX)}(\d+)\s*{re.escape(BBG_SUFFIX)}$",
     re.IGNORECASE,
 )
+# S0490FS 20Y5Y BLC Curncy  →  20y5y
+_FWD_RE = re.compile(
+    rf"^{re.escape(BBG_FWD_PREFIX)}\s+(\d+)Y(\d+)Y\s*{re.escape(BBG_FWD_SUFFIX)}$",
+    re.IGNORECASE,
+)
+_FWD_CLEAN_RE = re.compile(r"^(\d+)[Yy](\d+)[Yy]$")
+
+
+def parse_column_name(col: str) -> Optional[str]:
+    """
+    Map a raw Bloomberg column to a cleaned name.
+
+    Accepts:
+      - 'USOSFR10 BGN Curncy'           → '10'
+      - '10', '10Y', '10y'              → '10'
+      - 'S0490FS 20Y5Y BLC Curncy'      → '20y5y'
+      - '20y5y', '20Y5Y'               → '20y5y'
+    """
+    s = str(col).strip()
+
+    m = _TENOR_RE.match(s)
+    if m:
+        return str(int(m.group(1)))
+
+    m = _FWD_RE.match(s)
+    if m:
+        return f"{int(m.group(1))}y{int(m.group(2))}y"
+
+    m = _FWD_CLEAN_RE.fullmatch(s)
+    if m:
+        return f"{int(m.group(1))}y{int(m.group(2))}y"
+
+    m2 = re.fullmatch(r"(\d+)\s*[Yy]?", s)
+    if m2:
+        return str(int(m2.group(1)))
+
+    return None
 
 
 def parse_tenor_column(col: str) -> Optional[int]:
-    """
-    Map a raw column name to an integer tenor in years.
-
-    Accepts:
-      - 'USOSFR10 BGN Curncy'  (Bloomberg)
-      - '10', '10Y', '10y'     (already cleaned)
-    """
-    s = str(col).strip()
-    m = _TENOR_RE.match(s)
-    if m:
-        return int(m.group(1))
-    m2 = re.fullmatch(r"(\d+)\s*[Yy]?", s)
-    if m2:
-        return int(m2.group(1))
+    """Map a column to an integer tenor in years, or None if not a single tenor."""
+    name = parse_column_name(col)
+    if name is not None and name.isdigit():
+        return int(name)
     return None
+
+
+def is_tenor_column(name: str) -> bool:
+    return str(name).isdigit()
+
+
+def is_fwd_structure_column(name: str) -> bool:
+    return bool(_FWD_CLEAN_RE.fullmatch(str(name)))
 
 
 def clean_raw_columns(data_raw: pd.DataFrame) -> pd.DataFrame:
     """
-    Rename Bloomberg-style columns to integer tenors (as strings: '1','2',...).
+    Rename Bloomberg-style columns to cleaned names:
+      - outright swaps → '1', '2', … (tenor years)
+      - S0490FS forwards/spreads → '20y5y', '25y5y', …
     Drops columns that cannot be parsed. Keeps DatetimeIndex.
     """
     rename: Dict[str, str] = {}
     for col in data_raw.columns:
-        tenor = parse_tenor_column(col)
-        if tenor is not None:
-            rename[col] = str(tenor)
+        cleaned = parse_column_name(col)
+        if cleaned is not None:
+            rename[col] = cleaned
 
     missing = [c for c in data_raw.columns if c not in rename]
     if missing:
         log.warning("Dropping unparsed columns: %s", missing)
 
     out = data_raw.rename(columns=rename)[list(rename.values())].copy()
-    # de-dupe if both '10' and 'USOSFR10...' somehow present
+    # de-dupe if both '10' and 'USOSFR10...' (or two aliases) somehow present
     out = out.loc[:, ~out.columns.duplicated()]
     out = out.apply(pd.to_numeric, errors="coerce")
     return out
@@ -100,8 +144,8 @@ def _tenor_col(df: pd.DataFrame, tenor: int) -> pd.Series:
 
 
 def build_curve(data_raw: pd.DataFrame, name: str, short: int, long: int) -> pd.Series:
-    """Curve XsYs = long - short (steepener convention)."""
-    s = _tenor_col(data_raw, long) - _tenor_col(data_raw, short)
+    """Swap curve XsYs = (long - short) * 100  (percent → bp)."""
+    s = (_tenor_col(data_raw, long) - _tenor_col(data_raw, short)) * 100.0
     s.name = name
     return s
 
@@ -109,36 +153,85 @@ def build_curve(data_raw: pd.DataFrame, name: str, short: int, long: int) -> pd.
 def build_fly(
     data_raw: pd.DataFrame, name: str, left: int, body: int, right: int
 ) -> pd.Series:
-    """Butterfly XsYsZs = 2*body - left - right."""
+    """Swap butterfly XsYsZs = (2*body - left - right) * 100  (percent → bp)."""
     s = (
         2.0 * _tenor_col(data_raw, body)
         - _tenor_col(data_raw, left)
         - _tenor_col(data_raw, right)
-    )
+    ) * 100.0
     s.name = name
     return s
+
+
+def _col(df: pd.DataFrame, name: str) -> pd.Series:
+    if name not in df.columns:
+        raise KeyError(
+            f"Missing column '{name}' in data. "
+            f"Available: {list(df.columns)}"
+        )
+    return df[name]
+
+
+def build_fwd_curve(df: pd.DataFrame, name: str, left: str, right: str) -> pd.Series:
+    """Forward curve A_B = (B - A) * 100  (percent → bp)."""
+    s = (_col(df, right) - _col(df, left)) * 100.0
+    s.name = name
+    return s
+
+
+def build_fwd_fly(
+    df: pd.DataFrame, name: str, left: str, body: str, right: str
+) -> pd.Series:
+    """Forward fly A_B_C = (2*B - A - C) * 100  (percent → bp)."""
+    s = (2.0 * _col(df, body) - _col(df, left) - _col(df, right)) * 100.0
+    s.name = name
+    return s
+
+
+def required_forwards(
+    fwd_curves: Sequence[FwdCurveSpec] = FWD_CURVES,
+    fwd_flies: Sequence[FwdFlySpec] = FWD_FLIES,
+) -> Set[str]:
+    needed: Set[str] = set()
+    for _, a, b in fwd_curves:
+        needed.update((a, b))
+    for _, a, b, c in fwd_flies:
+        needed.update((a, b, c))
+    return needed
 
 
 def build_full_data(
     data_raw: pd.DataFrame,
     curves: Sequence[CurveSpec] = CURVES,
     flies: Sequence[FlySpec] = FLIES,
+    fwd_curves: Sequence[FwdCurveSpec] = FWD_CURVES,
+    fwd_flies: Sequence[FwdFlySpec] = FWD_FLIES,
     clean: bool = True,
 ) -> pd.DataFrame:
     """
-    From cleaned (or raw Bloomberg) tenor panel → DataFrame of all structures.
-
-    Columns = curve names + fly names. Index = same DatetimeIndex as raw.
+    From cleaned (or raw Bloomberg) panel → all structures:
+      - swap curves / flies (from USOSFR tenors)
+      - forward levels (1y1y, 5y5y, …)
+      - forward curves / flies (consecutive within each gap group)
     """
     raw = clean_raw_columns(data_raw) if clean else data_raw.copy()
 
     needed = required_tenors(curves, flies)
-    available = {int(c) for c in raw.columns if str(c).isdigit()}
+    available = {int(c) for c in raw.columns if is_tenor_column(c)}
     missing = sorted(needed - available)
     if missing:
         raise KeyError(
             f"Raw data missing tenors required by structures: {missing}. "
             f"Have: {sorted(available)}"
+        )
+
+    needed_fwd = required_forwards(fwd_curves, fwd_flies)
+    available_fwd = {c for c in raw.columns if is_fwd_structure_column(c)}
+    missing_fwd = sorted(needed_fwd - available_fwd)
+    if missing_fwd:
+        raise KeyError(
+            f"Raw data missing forwards required by structures: {missing_fwd}. "
+            f"Have: {sorted(available_fwd)}"
         )
 
     pieces: List[pd.Series] = []
@@ -147,14 +240,35 @@ def build_full_data(
     for name, a, b, c in flies:
         pieces.append(build_fly(raw, name, a, b, c))
 
+    # Forward levels (cleaned S0490FS columns)
+    def _fwd_key(name: str) -> Tuple[int, int]:
+        m = _FWD_CLEAN_RE.fullmatch(name)
+        return (int(m.group(2)), int(m.group(1))) if m else (0, 0)
+
+    for col in sorted(available_fwd, key=_fwd_key):
+        pieces.append(raw[col].rename(col))
+
+    # Forward curves / flies by consecutive groups (1y / 2y / 5y)
+    for name, a, b in fwd_curves:
+        pieces.append(build_fwd_curve(raw, name, a, b))
+    for name, a, b, c in fwd_flies:
+        pieces.append(build_fwd_fly(raw, name, a, b, c))
+
     full = pd.concat(pieces, axis=1)
     full.index = raw.index
     log.info(
-        "full_data: %d structures (%d curves, %d flies), %d bars",
-        full.shape[1], len(curves), len(flies), len(full),
+        "full_data: %d cols | swap curves=%d flies=%d | "
+        "fwd levels=%d curves=%d flies=%d | groups=%s | bars=%d",
+        full.shape[1],
+        len(curves),
+        len(flies),
+        len(available_fwd),
+        len(fwd_curves),
+        len(fwd_flies),
+        {k: len(v) for k, v in FWD_GROUPS.items()},
+        len(full),
     )
     return full
-
 
 def build_predicted_data(
     full_data: pd.DataFrame,

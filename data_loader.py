@@ -84,7 +84,7 @@ def generate_synthetic_sofr(
     Useful for local dry-runs before the real Excel is available.
     """
     if tenors is None:
-        tenors = [1, 2, 3, 5, 7, 10, 15, 20, 30, 35]
+        tenors = [1, 2, 3, 4, 5, 7, 10, 15, 20, 25, 30, 35, 40]
 
     rng = np.random.default_rng(seed)
     idx = pd.date_range("2024-01-01", periods=n_bars, freq=freq)
@@ -98,6 +98,14 @@ def generate_synthetic_sofr(
         # Simple Nelson-Siegel-ish shape + idiosyncratic noise
         rate = level + slope * np.log1p(t) / np.log1p(30) + rng.normal(0, 0.005, n_bars)
         data[f"USOSFR{t} BGN Curncy"] = rate
+
+    # Full forward grid (S0490FS startYgapY BLC Curncy → cleaned to startygapy)
+    from curve_config import FORWARDS
+    for start, gap in FORWARDS:
+        data[f"S0490FS {start}Y{gap}Y BLC Curncy"] = (
+            slope * (start / 30.0) + gap * 0.01
+            + rng.normal(0, 0.004, n_bars)
+        )
 
     # Inject a mild dislocation in 30s35s space near the end (via 35y)
     shock = np.zeros(n_bars)

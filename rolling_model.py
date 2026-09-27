@@ -21,6 +21,7 @@ from curve_config import (
     STEP_SIZE,
     TEST_SIZE,
     TRAIN_SIZE,
+    TRAIN_WINDOWS,
     RegressionSpec,
 )
 
@@ -194,6 +195,20 @@ def rolling_ols(
         }
     )
     fold_metrics = pd.DataFrame(fold_rows)
+
+    # Attach the fitted model (R², intercept, betas) used for each prediction
+    model_cols = []
+    if "train_r2" in fold_metrics.columns:
+        model_cols.append("train_r2")
+    model_cols.extend(
+        c for c in fold_metrics.columns if c == "intercept" or c.startswith("beta_")
+    )
+    if model_cols and not fold_metrics.empty:
+        model_frame = fold_metrics.set_index("fold")[model_cols].rename(
+            columns={"train_r2": "r2"}
+        )
+        predictions = predictions.join(model_frame, on="fold")
+
     overall = (
         _regression_metrics(
             predictions["y_true"].to_numpy(),
@@ -204,10 +219,12 @@ def rolling_ols(
     )
     overall["n_pred"] = float(len(predictions))
     overall["n_folds"] = float(fold_id)
+    overall["train_size"] = float(train_size)
 
     log.info(
-        "%s | folds=%d | OOS n=%d | R2=%.3f | RMSE=%.5f",
+        "%s | train=%d | folds=%d | OOS n=%d | R2=%.3f | RMSE=%.5f",
         spec.name,
+        train_size,
         fold_id,
         len(predictions),
         overall.get("r2", np.nan),
@@ -221,18 +238,148 @@ def rolling_ols(
     )
 
 
+def select_train_window(
+    full_data: pd.DataFrame,
+    predicted_data: pd.DataFrame,
+    spec: RegressionSpec,
+    train_windows: Sequence[int] = TRAIN_WINDOWS,
+    test_size: int = TEST_SIZE,
+    step_size: int = STEP_SIZE,
+    **kwargs,
+) -> Tuple[int, pd.DataFrame, RollingResult]:
+    """
+    Compare walk-forward OOS accuracy across candidate train windows.
+
+    Selection rule: lowest overall OOS RMSE (ties → higher R², then larger window).
+
+    Returns
+    -------
+    best_train_size, comparison_table, best_RollingResult
+    """
+    X_all, y_all = _aligned_xy(full_data, predicted_data, spec)
+    n = len(y_all)
+
+    rows: List[dict] = []
+    results: Dict[int, RollingResult] = {}
+    for tw in train_windows:
+        if tw < MIN_TRAIN_OBS or tw + 1 > n:
+            print(f"  skip train={tw}: need train+1 <= n={n}", flush=True)
+            continue
+        res = rolling_ols(
+            full_data,
+            predicted_data,
+            spec,
+            train_size=tw,
+            test_size=test_size,
+            step_size=step_size,
+            **kwargs,
+        )
+        results[tw] = res
+        o = res.overall
+        rows.append(
+            {
+                "train_size": tw,
+                "n_folds": int(o.get("n_folds", 0)),
+                "n_pred": int(o.get("n_pred", 0)),
+                "r2": o.get("r2", np.nan),
+                "rmse": o.get("rmse", np.nan),
+                "mae": o.get("mae", np.nan),
+            }
+        )
+
+    if not rows:
+        raise ValueError(f"No valid train windows for n={n}; tried {list(train_windows)}")
+
+    comparison = pd.DataFrame(rows).sort_values("train_size").reset_index(drop=True)
+    # best = min RMSE; if NaN RMSE, push to the end
+    ranked = comparison.sort_values(
+        by=["rmse", "r2", "train_size"],
+        ascending=[True, False, False],
+        na_position="last",
+    )
+    best_tw = int(ranked.iloc[0]["train_size"])
+    return best_tw, comparison, results[best_tw]
+
+
+def plot_residual_evolution(
+    result: RollingResult,
+    outfile: str = "residual_evolution.png",
+) -> str:
+    """One chart: OOS residual path for the chosen model. Saves PNG, returns path."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    preds = result.predictions
+    fig, ax = plt.subplots(figsize=(12, 4))
+    ax.axhline(0.0, color="black", lw=0.8)
+    ax.plot(preds.index, preds["residual"], color="C3", lw=1.0)
+    ax.set_title(
+        f"Residual evolution — {result.spec.name}  "
+        f"(train={int(result.overall.get('train_size', TRAIN_SIZE))})"
+    )
+    ax.set_ylabel("residual (actual − pred)")
+    ax.set_xlabel("time")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(outfile, dpi=120)
+    plt.close(fig)
+    return outfile
+
+
+def instance_predictions(result: RollingResult) -> pd.DataFrame:
+    """
+    Main deliverable: one row per OOS timestamp.
+    Columns: y_true, y_pred, residual, fold, r2, intercept, beta_<feature>, …
+    """
+    out = result.predictions.copy()
+    out.index.name = "time"
+    return out
+
+
 def run_regressions(
     full_data: pd.DataFrame,
     predicted_data: pd.DataFrame,
     specs: Sequence[RegressionSpec] = REGRESSIONS,
+    train_size: int = TRAIN_SIZE,
+    tune_window: bool = True,
+    train_windows: Sequence[int] = TRAIN_WINDOWS,
     **kwargs,
 ) -> Dict[str, RollingResult]:
-    """Run every RegressionSpec; returns dict keyed by spec.name."""
-    results = {}
+    """
+    Run every RegressionSpec.
+
+    If tune_window=True, pick the best TRAIN_WINDOWS entry per spec (min OOS RMSE)
+    and refit is already done inside select_train_window.
+    """
+    results: Dict[str, RollingResult] = {}
     for spec in specs:
-        results[spec.name] = rolling_ols(
-            full_data, predicted_data, spec, **kwargs
-        )
+        if tune_window:
+            print(f"\nWindow search — {spec.name}", flush=True)
+            best_tw, comparison, best_res = select_train_window(
+                full_data,
+                predicted_data,
+                spec,
+                train_windows=train_windows,
+                **kwargs,
+            )
+            print(comparison.to_string(index=False), flush=True)
+            print(
+                f"  → chosen train_size={best_tw}  "
+                f"OOS R2={best_res.overall.get('r2', float('nan')):.4f}  "
+                f"RMSE={best_res.overall.get('rmse', float('nan')):.5f}",
+                flush=True,
+            )
+            results[spec.name] = best_res
+        else:
+            results[spec.name] = rolling_ols(
+                full_data,
+                predicted_data,
+                spec,
+                train_size=train_size,
+                **kwargs,
+            )
     return results
 
 

@@ -8,3 +8,8 @@ __pycache__/
 .env
 .venv/
 venv/
+predictions*.csv
+zscore_*.csv
+summary.csv
+residual_evolution*.png
+
