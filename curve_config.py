@@ -167,3 +167,22 @@ TEST_SIZE = 1                       # predict one bar ahead
 STEP_SIZE = 1                       # then roll the window by one bar
 ADD_INTERCEPT = True
 MIN_TRAIN_OBS = 30                  # skip fit if too few clean rows after NaN drop
+
+# ── Live ops: hourly BBG ingest + scheduled email report ──────────────────────
+# New BBG print arrives every DATA_UPDATE_HOURS → append to LIVE_STORE_PATH.
+# Keep only the last MAX_HISTORY_BARS rows (drop oldest) so history size is capped.
+DATA_UPDATE_HOURS = 1                 # XXX: pull frequency
+REPORT_EVERY_HOURS = 3                # YYY: email cadence
+LIVE_STORE_PATH = "sofr_live.csv"     # stacked panel on disk (same folder)
+MAX_HISTORY_BARS = 2000               # rolling window length after each append
+LIVE_TUNE_WINDOW = False              # True = re-search TRAIN_WINDOWS each report (slower)
+
+# Email (override via env: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
+#        REPORT_TO, REPORT_FROM)
+SMTP_HOST = ""
+SMTP_PORT = 587
+SMTP_USER = ""
+SMTP_PASSWORD = ""
+REPORT_FROM = ""
+REPORT_TO: List[str] = []             # e.g. ["desk@firm.com"]
+EMAIL_ENABLED = False                 # set True once SMTP + REPORT_TO are filled

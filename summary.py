@@ -50,6 +50,8 @@ def build_summary(
         if panel.empty:
             continue
         last = panel.iloc[-1]
+        # residual column carries z_50 when available (compact single table)
+        z50 = last["z_50"] if "z_50" in last.index else float("nan")
         rows.append(
             {
                 "time": panel.index[-1],
@@ -57,7 +59,7 @@ def build_summary(
                 "nivel": float(last["value"]),
                 "predicted": float(last["fair"]),
                 "model": res.spec.param,
-                "residual": float("nan"),
+                "residual": float(z50) if pd.notna(z50) else float("nan"),
             }
         )
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -245,6 +245,7 @@ def select_train_window(
     train_windows: Sequence[int] = TRAIN_WINDOWS,
     test_size: int = TEST_SIZE,
     step_size: int = STEP_SIZE,
+    quiet: bool = False,
     **kwargs,
 ) -> Tuple[int, pd.DataFrame, RollingResult]:
     """
@@ -263,7 +264,8 @@ def select_train_window(
     results: Dict[int, RollingResult] = {}
     for tw in train_windows:
         if tw < MIN_TRAIN_OBS or tw + 1 > n:
-            print(f"  skip train={tw}: need train+1 <= n={n}", flush=True)
+            if not quiet:
+                print(f"  skip train={tw}: need train+1 <= n={n}", flush=True)
             continue
         res = rolling_ols(
             full_data,
@@ -304,12 +306,22 @@ def select_train_window(
 def plot_residual_evolution(
     result: RollingResult,
     outfile: str = "residual_evolution.png",
-) -> str:
-    """One chart: OOS residual path for the chosen model. Saves PNG, returns path."""
-    import matplotlib
+) -> Optional[str]:
+    """
+    One chart: OOS residual path. Saves PNG and returns path.
+    If matplotlib is not installed, skips and returns None.
+    """
+    try:
+        import matplotlib
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print(
+            f"  skip plot ({result.spec.name}): matplotlib not installed",
+            flush=True,
+        )
+        return None
 
     preds = result.predictions
     fig, ax = plt.subplots(figsize=(12, 4))
@@ -345,6 +357,7 @@ def run_regressions(
     train_size: int = TRAIN_SIZE,
     tune_window: bool = True,
     train_windows: Sequence[int] = TRAIN_WINDOWS,
+    quiet: bool = False,
     **kwargs,
 ) -> Dict[str, RollingResult]:
     """
@@ -356,21 +369,24 @@ def run_regressions(
     results: Dict[str, RollingResult] = {}
     for spec in specs:
         if tune_window:
-            print(f"\nWindow search — {spec.name}", flush=True)
+            if not quiet:
+                print(f"\nWindow search — {spec.name}", flush=True)
             best_tw, comparison, best_res = select_train_window(
                 full_data,
                 predicted_data,
                 spec,
                 train_windows=train_windows,
+                quiet=quiet,
                 **kwargs,
             )
-            print(comparison.to_string(index=False), flush=True)
-            print(
-                f"  → chosen train_size={best_tw}  "
-                f"OOS R2={best_res.overall.get('r2', float('nan')):.4f}  "
-                f"RMSE={best_res.overall.get('rmse', float('nan')):.5f}",
-                flush=True,
-            )
+            if not quiet:
+                print(comparison.to_string(index=False), flush=True)
+                print(
+                    f"  → chosen train_size={best_tw}  "
+                    f"OOS R2={best_res.overall.get('r2', float('nan')):.4f}  "
+                    f"RMSE={best_res.overall.get('rmse', float('nan')):.5f}",
+                    flush=True,
+                )
             results[spec.name] = best_res
         else:
             results[spec.name] = rolling_ols(

@@ -11,5 +11,6 @@ venv/
 predictions*.csv
 zscore_*.csv
 summary.csv
+sofr_live.csv
 residual_evolution*.png
 
