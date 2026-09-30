@@ -1,5 +1,5 @@
 # =============================================================================
-# report_email.py  — Email the terse summary table every REPORT_EVERY_HOURS
+# report_email.py  — Email prediction / summary tables (SMTP optional)
 # =============================================================================
 
 from __future__ import annotations
@@ -28,14 +28,32 @@ def _cfg(name: str, default: str = "") -> str:
 
 
 def format_summary_text(summary: pd.DataFrame, asof: Optional[str] = None) -> str:
-    """Plain-text body: as-of + rounded table only."""
+    """Plain-text body: as-of + rounded results table."""
     show = summary.copy()
-    for c in ("nivel", "predicted", "residual"):
+    col_rz = "residual/zscore"
+    for c in ("nivel", "predicted", col_rz):
         if c in show.columns:
             show[c] = pd.to_numeric(show[c], errors="coerce").round(3)
-    cols = [c for c in ["model", "structure", "nivel", "predicted", "residual"] if c in show.columns]
+    # z-score rows: predicted is unused — show blank, not nan
+    if "predicted" in show.columns:
+        show["predicted"] = show["predicted"].apply(
+            lambda v: "" if pd.isna(v) else f"{v:.3f}"
+        )
+    if col_rz in show.columns:
+        show[col_rz] = show[col_rz].apply(
+            lambda v: "" if pd.isna(v) else f"{v:.3f}"
+        )
+    if "nivel" in show.columns:
+        show["nivel"] = show["nivel"].apply(
+            lambda v: "" if pd.isna(v) else f"{v:.3f}"
+        )
+    cols = [
+        c
+        for c in ["model", "structure", "nivel", "predicted", col_rz, "equation", "time"]
+        if c in show.columns
+    ]
     show = show[cols]
-    header = "SOFR screener"
+    header = "SOFR screener — results"
     if asof:
         header += f"  |  asof {asof}"
     return header + "\n\n" + show.to_string(index=False) + "\n"
@@ -46,10 +64,12 @@ def send_summary_email(
     asof: Optional[str] = None,
     subject: Optional[str] = None,
     to: Optional[Sequence[str]] = None,
+    body: Optional[str] = None,
 ) -> bool:
     """
     Send summary. Returns True if sent, False if skipped (disabled / incomplete).
     Credentials from curve_config or env (SMTP_* / REPORT_TO / REPORT_FROM).
+    Pass body= to override format_summary_text (e.g. prediction tables).
     """
     enabled = os.environ.get("EMAIL_ENABLED", str(EMAIL_ENABLED)).lower() in {
         "1", "true", "yes",
@@ -64,11 +84,12 @@ def send_summary_email(
     if env_to:
         mail_to = [x.strip() for x in env_to.split(",") if x.strip()]
 
-    body = format_summary_text(summary, asof=asof)
+    text = body if body is not None else format_summary_text(summary, asof=asof)
     subj = subject or f"SOFR screener {asof or ''}".strip()
 
     if not enabled or not host or not mail_to or not mail_from:
-        print(body, flush=True)
+        if body is None:
+            print(text, flush=True)
         print(
             "[email skipped] set EMAIL_ENABLED=true and SMTP_HOST / REPORT_TO "
             "(and credentials) to send",
@@ -80,7 +101,7 @@ def send_summary_email(
     msg["Subject"] = subj
     msg["From"] = mail_from
     msg["To"] = ", ".join(mail_to)
-    msg.attach(MIMEText(body, "plain", "utf-8"))
+    msg.attach(MIMEText(text, "plain", "utf-8"))
 
     with smtplib.SMTP(host, port, timeout=30) as smtp:
         smtp.starttls()

@@ -87,6 +87,23 @@ def parse_tenor_column(col: str) -> Optional[int]:
     return None
 
 
+def resolve_feature_name(name: str) -> str:
+    """
+    Map a feature label from settings to a full_data column.
+      'USOSFR5' / 'USOSFR5 BGN Curncy' / '5Y' → '5'
+      '2s5s10s' / '5y5y' → unchanged (if not a tenor alias)
+    """
+    s = str(name).strip()
+    parsed = parse_column_name(s)
+    if parsed is not None:
+        return parsed
+    # bare USOSFR{N} without suffix
+    m = re.fullmatch(rf"{re.escape(BBG_PREFIX)}(\d+)", s, re.IGNORECASE)
+    if m:
+        return str(int(m.group(1)))
+    return s
+
+
 def is_tenor_column(name: str) -> bool:
     return str(name).isdigit()
 
@@ -235,6 +252,11 @@ def build_full_data(
         )
 
     pieces: List[pd.Series] = []
+
+    # Outright swap tenors (so regressions can use e.g. '5' / USOSFR5 as X)
+    for t in sorted(available):
+        pieces.append(raw[str(t)].rename(str(t)))
+
     for name, a, b in curves:
         pieces.append(build_curve(raw, name, a, b))
     for name, a, b, c in flies:
@@ -257,9 +279,10 @@ def build_full_data(
     full = pd.concat(pieces, axis=1)
     full.index = raw.index
     log.info(
-        "full_data: %d cols | swap curves=%d flies=%d | "
+        "full_data: %d cols | tenors=%d | swap curves=%d flies=%d | "
         "fwd levels=%d curves=%d flies=%d | groups=%s | bars=%d",
         full.shape[1],
+        len(available),
         len(curves),
         len(flies),
         len(available_fwd),

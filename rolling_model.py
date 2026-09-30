@@ -17,13 +17,15 @@ import pandas as pd
 from curve_config import (
     ADD_INTERCEPT,
     MIN_TRAIN_OBS,
+    REGRESSION_SCREENS,
     REGRESSIONS,
     STEP_SIZE,
     TEST_SIZE,
     TRAIN_SIZE,
-    TRAIN_WINDOWS,
+    RegressionScreen,
     RegressionSpec,
 )
+from structures import resolve_feature_name
 
 log = logging.getLogger(__name__)
 
@@ -209,26 +211,28 @@ def rolling_ols(
         )
         predictions = predictions.join(model_frame, on="fold")
 
-    overall = (
-        _regression_metrics(
-            predictions["y_true"].to_numpy(),
-            predictions["y_pred"].to_numpy(),
+    overall: Dict[str, float] = {}
+    if len(predictions):
+        # Mean signed error across folds: mean(pred − actual)
+        err = predictions["y_pred"].to_numpy() - predictions["y_true"].to_numpy()
+        overall["prediction_accuracy"] = float(np.mean(err))
+        # Keep classic pooled metrics for optional diagnostics / plots
+        overall.update(
+            _regression_metrics(
+                predictions["y_true"].to_numpy(),
+                predictions["y_pred"].to_numpy(),
+            )
         )
-        if len(predictions)
-        else {}
-    )
     overall["n_pred"] = float(len(predictions))
     overall["n_folds"] = float(fold_id)
     overall["train_size"] = float(train_size)
 
     log.info(
-        "%s | train=%d | folds=%d | OOS n=%d | R2=%.3f | RMSE=%.5f",
+        "%s | train=%d | folds=%d | prediction_accuracy=%.5f",
         spec.name,
         train_size,
         fold_id,
-        len(predictions),
-        overall.get("r2", np.nan),
-        overall.get("rmse", np.nan),
+        overall.get("prediction_accuracy", np.nan),
     )
     return RollingResult(
         spec=spec,
@@ -238,69 +242,95 @@ def rolling_ols(
     )
 
 
-def select_train_window(
+def _spec_from_features(
+    screen: RegressionScreen,
+    features: Sequence[str],
+) -> RegressionSpec:
+    resolved = tuple(resolve_feature_name(f) for f in features)
+    return RegressionSpec(name=screen.name, target=screen.target, features=resolved)
+
+
+def _features_label(features: Sequence[str]) -> str:
+    return "+".join(features) if features else "(none)"
+
+
+def select_feature_set(
     full_data: pd.DataFrame,
     predicted_data: pd.DataFrame,
-    spec: RegressionSpec,
-    train_windows: Sequence[int] = TRAIN_WINDOWS,
+    screen: RegressionScreen,
+    train_size: int = TRAIN_SIZE,
     test_size: int = TEST_SIZE,
     step_size: int = STEP_SIZE,
     quiet: bool = False,
     **kwargs,
-) -> Tuple[int, pd.DataFrame, RollingResult]:
+) -> Tuple[Tuple[str, ...], pd.DataFrame, RollingResult]:
     """
-    Compare walk-forward OOS accuracy across candidate train windows.
+    Compare walk-forward prediction accuracy across candidate feature sets.
 
-    Selection rule: lowest overall OOS RMSE (ties → higher R², then larger window).
+    prediction_accuracy = mean(y_pred − y_true) over all OOS folds.
+    Selection rule: closest to 0 (ties → more features, then first listed).
 
     Returns
     -------
-    best_train_size, comparison_table, best_RollingResult
+    best_features, comparison_table, best_RollingResult
     """
-    X_all, y_all = _aligned_xy(full_data, predicted_data, spec)
-    n = len(y_all)
-
     rows: List[dict] = []
-    results: Dict[int, RollingResult] = {}
-    for tw in train_windows:
-        if tw < MIN_TRAIN_OBS or tw + 1 > n:
+    results: Dict[str, RollingResult] = {}
+    label_to_feats: Dict[str, Tuple[str, ...]] = {}
+
+    for raw_feats in screen.feature_sets:
+        spec = _spec_from_features(screen, raw_feats)
+        label = _features_label(spec.features)
+        try:
+            res = rolling_ols(
+                full_data,
+                predicted_data,
+                spec,
+                train_size=train_size,
+                test_size=test_size,
+                step_size=step_size,
+                **kwargs,
+            )
+        except (KeyError, ValueError) as exc:
             if not quiet:
-                print(f"  skip train={tw}: need train+1 <= n={n}", flush=True)
+                print(f"  skip features={label}: {exc}", flush=True)
             continue
-        res = rolling_ols(
-            full_data,
-            predicted_data,
-            spec,
-            train_size=tw,
-            test_size=test_size,
-            step_size=step_size,
-            **kwargs,
-        )
-        results[tw] = res
+        results[label] = res
+        label_to_feats[label] = spec.features
         o = res.overall
         rows.append(
             {
-                "train_size": tw,
+                "features": label,
                 "n_folds": int(o.get("n_folds", 0)),
-                "n_pred": int(o.get("n_pred", 0)),
-                "r2": o.get("r2", np.nan),
-                "rmse": o.get("rmse", np.nan),
-                "mae": o.get("mae", np.nan),
+                "prediction_accuracy": o.get("prediction_accuracy", np.nan),
             }
         )
 
     if not rows:
-        raise ValueError(f"No valid train windows for n={n}; tried {list(train_windows)}")
+        raise ValueError(
+            f"No valid feature sets for screen={screen.name} target={screen.target}; "
+            f"tried {list(screen.feature_sets)}"
+        )
 
-    comparison = pd.DataFrame(rows).sort_values("train_size").reset_index(drop=True)
-    # best = min RMSE; if NaN RMSE, push to the end
-    ranked = comparison.sort_values(
-        by=["rmse", "r2", "train_size"],
-        ascending=[True, False, False],
+    comparison = pd.DataFrame(rows).reset_index(drop=True)
+    ranked = comparison.assign(
+        _abs_acc=comparison["prediction_accuracy"].abs(),
+        _n_feat=comparison["features"].str.count(r"\+") + 1,
+    ).sort_values(
+        by=["_abs_acc", "_n_feat"],
+        ascending=[True, False],
         na_position="last",
     )
-    best_tw = int(ranked.iloc[0]["train_size"])
-    return best_tw, comparison, results[best_tw]
+    best_label = str(ranked.iloc[0]["features"])
+    return label_to_feats[best_label], comparison, results[best_label]
+
+
+# Back-compat alias
+def select_train_window(*args, **kwargs):
+    raise RuntimeError(
+        "select_train_window is removed — k is fixed (TRAIN_SIZE). "
+        "Use select_feature_set / run_regressions(tune_features=True)."
+    )
 
 
 def plot_residual_evolution(
@@ -350,46 +380,177 @@ def instance_predictions(result: RollingResult) -> pd.DataFrame:
     return out
 
 
+def equation_from_beta(
+    target: str,
+    features: Sequence[str],
+    beta: np.ndarray,
+    add_intercept: bool = True,
+) -> str:
+    """Format y = a + b1*x1 + … from a fitted beta vector."""
+    if add_intercept:
+        intercept = float(beta[0])
+        coefs = beta[1:]
+    else:
+        intercept = 0.0
+        coefs = beta
+    pieces = [f"{intercept:.4f}"]
+    for feat, b in zip(features, coefs):
+        b = float(b)
+        sign = "+" if b >= 0 else "-"
+        pieces.append(f"{sign} {abs(b):.4f}*{feat}")
+    return f"{target} = " + " ".join(pieces)
+
+
+def fit_predict_next(
+    full_data: pd.DataFrame,
+    predicted_data: pd.DataFrame,
+    spec: RegressionSpec,
+    train_size: int = TRAIN_SIZE,
+    add_intercept: bool = ADD_INTERCEPT,
+) -> dict:
+    """
+    One-shot prediction for a locked model.
+
+    - y_hat_now: train iloc[n-k-1 : n-1], predict last bar (realized OOS)
+    - y_hat_next: train iloc[n-k : n], forecast with X of last bar (next bar ~15m)
+    """
+    resolved = RegressionSpec(
+        name=spec.name,
+        target=spec.target,
+        features=tuple(resolve_feature_name(f) for f in spec.features),
+    )
+    X_all, y_all = _aligned_xy(full_data, predicted_data, resolved)
+    n = len(y_all)
+    k = int(train_size)
+    if n < k + 1:
+        raise ValueError(
+            f"{resolved.name}: need at least k+1={k + 1} clean rows; have {n}"
+        )
+
+    # Latest realized OOS: train [n-k-1 : n-1] → predict [n-1]
+    tr0, tr1 = n - k - 1, n - 1
+    X_tr = X_all.iloc[tr0:tr1].to_numpy(dtype=float)
+    y_tr = y_all.iloc[tr0:tr1].to_numpy(dtype=float)
+    X_te = X_all.iloc[tr1 : tr1 + 1].to_numpy(dtype=float)
+    beta_now, _ = ols_fit(X_tr, y_tr, add_intercept=add_intercept)
+    y_hat_now = float(ols_predict(X_te, beta_now, add_intercept=add_intercept)[0])
+    y_true_now = float(y_all.iloc[tr1])
+    t_now = y_all.index[tr1]
+
+    # Next-bar forecast: train [n-k : n] → predict with X[-1]
+    X_tr2 = X_all.iloc[n - k : n].to_numpy(dtype=float)
+    y_tr2 = y_all.iloc[n - k : n].to_numpy(dtype=float)
+    X_last = X_all.iloc[n - 1 : n].to_numpy(dtype=float)
+    beta_next, _ = ols_fit(X_tr2, y_tr2, add_intercept=add_intercept)
+    y_hat_next = float(ols_predict(X_last, beta_next, add_intercept=add_intercept)[0])
+
+    row = {
+        "model": resolved.name,
+        "structure": resolved.target,
+        "features": "+".join(resolved.features),
+        "k": k,
+        "time": t_now,
+        "nivel": y_true_now,
+        "y_hat_now": y_hat_now,
+        "residual": y_true_now - y_hat_now,
+        "y_hat_next": y_hat_next,
+        "equation": equation_from_beta(
+            resolved.target, resolved.features, beta_next, add_intercept=add_intercept
+        ),
+    }
+    if add_intercept:
+        row["intercept"] = float(beta_next[0])
+        for j, fname in enumerate(resolved.features):
+            row[f"beta_{fname}"] = float(beta_next[j + 1])
+    else:
+        for j, fname in enumerate(resolved.features):
+            row[f"beta_{fname}"] = float(beta_next[j])
+    return row
+
+
 def run_regressions(
     full_data: pd.DataFrame,
     predicted_data: pd.DataFrame,
-    specs: Sequence[RegressionSpec] = REGRESSIONS,
+    screens: Sequence[RegressionScreen] = REGRESSION_SCREENS,
+    specs: Optional[Sequence[RegressionSpec]] = None,
     train_size: int = TRAIN_SIZE,
-    tune_window: bool = True,
-    train_windows: Sequence[int] = TRAIN_WINDOWS,
+    tune_features: bool = True,
+    tune_window: Optional[bool] = None,  # legacy alias → tune_features
     quiet: bool = False,
     **kwargs,
 ) -> Dict[str, RollingResult]:
     """
-    Run every RegressionSpec.
+    Run every RegressionScreen (or explicit specs).
 
-    If tune_window=True, pick the best TRAIN_WINDOWS entry per spec (min OOS RMSE)
-    and refit is already done inside select_train_window.
+    If tune_features=True (default), compare screen.feature_sets at fixed k=train_size
+    and keep the set with prediction_accuracy closest to 0.
     """
+    if tune_window is not None:
+        tune_features = tune_window
+
     results: Dict[str, RollingResult] = {}
-    for spec in specs:
-        if tune_window:
-            if not quiet:
-                print(f"\nWindow search — {spec.name}", flush=True)
-            best_tw, comparison, best_res = select_train_window(
+
+    # Legacy path: flat RegressionSpec list, no feature search
+    if specs is not None:
+        for spec in specs:
+            results[spec.name] = rolling_ols(
                 full_data,
                 predicted_data,
-                spec,
-                train_windows=train_windows,
+                RegressionSpec(
+                    name=spec.name,
+                    target=spec.target,
+                    features=tuple(resolve_feature_name(f) for f in spec.features),
+                ),
+                train_size=train_size,
+                **kwargs,
+            )
+        return results
+
+    for screen in screens:
+        if tune_features and len(screen.feature_sets) > 0:
+            if not quiet:
+                print(flush=True)
+                print("─" * 72, flush=True)
+                print(
+                    f"  [1]  Accuracy metrics  —  {screen.name}  "
+                    f"(target={screen.target}, k={train_size})",
+                    flush=True,
+                )
+                print(
+                    "  Per fold: err = pred − actual · "
+                    "prediction_accuracy = mean(err) · "
+                    "pick features closest to 0",
+                    flush=True,
+                )
+                print("─" * 72, flush=True)
+                print(flush=True)
+            best_feats, comparison, best_res = select_feature_set(
+                full_data,
+                predicted_data,
+                screen,
+                train_size=train_size,
                 quiet=quiet,
                 **kwargs,
             )
             if not quiet:
-                print(comparison.to_string(index=False), flush=True)
+                show = comparison.copy()
+                show["prediction_accuracy"] = show["prediction_accuracy"].round(4)
+                print(show.to_string(index=False), flush=True)
+                print(flush=True)
                 print(
-                    f"  → chosen train_size={best_tw}  "
-                    f"OOS R2={best_res.overall.get('r2', float('nan')):.4f}  "
-                    f"RMSE={best_res.overall.get('rmse', float('nan')):.5f}",
+                    f"  →  chosen features = {_features_label(best_feats)}    "
+                    f"prediction_accuracy = "
+                    f"{best_res.overall.get('prediction_accuracy', float('nan')):.4f}",
                     flush=True,
                 )
-            results[spec.name] = best_res
+                print(flush=True)
+            results[screen.name] = best_res
         else:
-            results[spec.name] = rolling_ols(
+            # No search: use first feature set
+            if not screen.feature_sets:
+                raise ValueError(f"Screen {screen.name} has empty feature_sets")
+            spec = _spec_from_features(screen, screen.feature_sets[0])
+            results[screen.name] = rolling_ols(
                 full_data,
                 predicted_data,
                 spec,
