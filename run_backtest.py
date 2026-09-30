@@ -57,6 +57,8 @@ def main() -> None:
                 "features": "+".join(res.spec.features),
                 "k": int(o.get("train_size", TRAIN_SIZE)),
                 "n_folds": int(o.get("n_folds", 0)),
+                "mean_error": round(float(o.get("mean_error", float("nan"))), 4),
+                "mean_value": round(float(o.get("mean_value", float("nan"))), 4),
                 "prediction_accuracy": round(
                     float(o.get("prediction_accuracy", float("nan"))), 4
                 ),
@@ -66,7 +68,12 @@ def main() -> None:
 
     summary = pd.DataFrame(rows)
     print("─" * 72, flush=True)
-    print("  Backtest accuracy  (prediction_accuracy = mean(pred − actual))", flush=True)
+    print(
+        "  Backtest accuracy  "
+        "(mean_error=mean(|e|), mean_value=mean(|y|), "
+        "prediction_accuracy=mean(|e|/|y|))",
+        flush=True,
+    )
     print("─" * 72, flush=True)
     print(flush=True)
     print(summary.to_string(index=False), flush=True)

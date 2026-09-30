@@ -124,6 +124,12 @@ def main() -> None:
                 "structure": screen.target,
                 "features": "+".join(res.spec.features),
                 "k": int(res.overall.get("train_size", TRAIN_SIZE)),
+                "mean_error": round(
+                    float(res.overall.get("mean_error", float("nan"))), 4
+                ),
+                "mean_value": round(
+                    float(res.overall.get("mean_value", float("nan"))), 4
+                ),
                 "prediction_accuracy": round(
                     float(res.overall.get("prediction_accuracy", float("nan"))), 4
                 ),
