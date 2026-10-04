@@ -6,7 +6,7 @@ Three modes:
 |------|---------|------|
 | **Explore** | `python3.8 -u run_pipeline.py` | Compare `REGRESSION_SCREENS` feature sets, pick winners |
 | **Prediction** | `python3.8 -u run_prediction.py --once` | Locked `CHOSEN_MODELS` → next-bar forecast (+ email loop without `--once`) |
-| **Backtest** | `python3.8 -u run_backtest.py` | Walk-forward of `CHOSEN_MODELS` over `BACKTEST_START`…`BACKTEST_END` |
+| **Backtest** | `python3.8 -u run_backtest.py` | Residual mean-reversion on `CHOSEN_MODELS` (z + \|r\| thr → PnL) |
 
 Optional BBG ingest only: `python3.8 -u run_live.py` (does **not** predict).
 

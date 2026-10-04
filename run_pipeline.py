@@ -112,6 +112,8 @@ def main() -> None:
 
     last_rows = []
     for screen in REGRESSION_SCREENS:
+        if screen.name not in results:
+            continue
         res = results[screen.name]
         preds = instance_predictions(res)
         preds.to_csv(Path(f"predictions_{screen.name}.csv"))

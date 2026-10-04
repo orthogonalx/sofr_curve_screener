@@ -278,6 +278,22 @@ PREDICTION_EMAIL_EVERY_HOURS = 3    # ZZZ: email cadence for run_prediction
 BACKTEST_START = "2024-01-01"       # inclusive
 BACKTEST_END = None                 # None = through last available bar
 
+# Residual mean-reversion strategy (run_backtest.py)
+# residual r = y_true − y_pred (bp). z = (r − μ) / σ over past BACKTEST_Z_LOOKBACK bars only.
+# Enter long  if z <= −BACKTEST_ZSCORE_THR and |r| >= BACKTEST_RESIDUAL_THR_BP
+# Enter short if z >= +BACKTEST_ZSCORE_THR and |r| >= BACKTEST_RESIDUAL_THR_BP
+# Else flat. PnL bar t = position[t-1] * (y[t] − y[t-1]).
+#
+# BACKTEST_POSITION_MODE:
+#   "one_bar" (default) — each signal bar is a 1-period trade (close next bar); |pos|∈{0,1};
+#                         n_trades = n_long + n_short (= # signal bars).
+#   "hold"              — stay in the position while the signal persists (current behaviour);
+#                         n_entries = # times we enter/change into a non-flat position.
+BACKTEST_RESIDUAL_THR_BP = 0.5      # min |residual| in bp to take a trade
+BACKTEST_ZSCORE_THR = 1.0           # |z(residual)| entry threshold
+BACKTEST_Z_LOOKBACK = 50            # past bars for residual μ/σ (no look-ahead)
+BACKTEST_POSITION_MODE = "one_bar"  # "one_bar" | "hold"
+
 # ── Optional BBG ingest only (run_live.py) — not used by prediction ───────────
 DATA_UPDATE_HOURS = 1                 # pull frequency if using run_live
 LIVE_STORE_PATH = "sofr_live.csv"     # stacked panel on disk (same folder)

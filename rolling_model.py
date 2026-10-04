@@ -498,23 +498,44 @@ def run_regressions(
 
     results: Dict[str, RollingResult] = {}
 
+    def _target_available(target: str) -> bool:
+        return target in predicted_data.columns or target in full_data.columns
+
     # Legacy path: flat RegressionSpec list, no feature search
     if specs is not None:
         for spec in specs:
-            results[spec.name] = rolling_ols(
-                full_data,
-                predicted_data,
-                RegressionSpec(
-                    name=spec.name,
-                    target=spec.target,
-                    features=tuple(resolve_feature_name(f) for f in spec.features),
-                ),
-                train_size=train_size,
-                **kwargs,
-            )
+            if not _target_available(spec.target):
+                if not quiet:
+                    print(
+                        f"  skip {spec.name}: target '{spec.target}' not in panel",
+                        flush=True,
+                    )
+                continue
+            try:
+                results[spec.name] = rolling_ols(
+                    full_data,
+                    predicted_data,
+                    RegressionSpec(
+                        name=spec.name,
+                        target=spec.target,
+                        features=tuple(resolve_feature_name(f) for f in spec.features),
+                    ),
+                    train_size=train_size,
+                    **kwargs,
+                )
+            except (KeyError, ValueError) as exc:
+                if not quiet:
+                    print(f"  skip {spec.name}: {exc}", flush=True)
         return results
 
     for screen in screens:
+        if not _target_available(screen.target):
+            if not quiet:
+                print(
+                    f"  skip screen {screen.name}: target '{screen.target}' not in panel",
+                    flush=True,
+                )
+            continue
         if tune_features and len(screen.feature_sets) > 0:
             if not quiet:
                 print(flush=True)
