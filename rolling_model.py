@@ -213,15 +213,21 @@ def rolling_ols(
 
     overall: Dict[str, float] = {}
     if len(predictions):
-        # Mean signed error across folds: mean(pred − actual)
-        err = predictions["y_pred"].to_numpy() - predictions["y_true"].to_numpy()
-        overall["prediction_accuracy"] = float(np.mean(err))
+        # Mean absolute *relative* error across folds:
+        #   prediction_accuracy = mean( |pred − actual| / |actual| )
+        # Floor |actual| so near-zero flies/curves don't explode.
+        # Lower / closer to 0 is better (always ≥ 0).
+        y_true = predictions["y_true"].to_numpy(dtype=float)
+        y_pred = predictions["y_pred"].to_numpy(dtype=float)
+        err = np.abs(y_pred - y_true)
+        abs_y = np.abs(y_true)
+        denom = np.maximum(abs_y, 1e-6)
+        overall["mean_error"] = float(np.mean(err))       # mean(|pred − actual|)
+        overall["mean_value"] = float(np.mean(abs_y))     # mean(|actual|)
+        overall["prediction_accuracy"] = float(np.mean(err / denom))
         # Keep classic pooled metrics for optional diagnostics / plots
         overall.update(
-            _regression_metrics(
-                predictions["y_true"].to_numpy(),
-                predictions["y_pred"].to_numpy(),
-            )
+            _regression_metrics(y_true, y_pred)
         )
     overall["n_pred"] = float(len(predictions))
     overall["n_folds"] = float(fold_id)
@@ -267,8 +273,8 @@ def select_feature_set(
     """
     Compare walk-forward prediction accuracy across candidate feature sets.
 
-    prediction_accuracy = mean(y_pred − y_true) over all OOS folds.
-    Selection rule: closest to 0 (ties → more features, then first listed).
+    prediction_accuracy = mean( |y_pred − y_true| / |y_true| ) over all OOS folds
+    (MAPE-style; |y_true| floored at 1e-6). Lowest / closest to 0 wins.
 
     Returns
     -------
@@ -302,6 +308,8 @@ def select_feature_set(
             {
                 "features": label,
                 "n_folds": int(o.get("n_folds", 0)),
+                "mean_error": o.get("mean_error", np.nan),
+                "mean_value": o.get("mean_value", np.nan),
                 "prediction_accuracy": o.get("prediction_accuracy", np.nan),
             }
         )
@@ -490,23 +498,44 @@ def run_regressions(
 
     results: Dict[str, RollingResult] = {}
 
+    def _target_available(target: str) -> bool:
+        return target in predicted_data.columns or target in full_data.columns
+
     # Legacy path: flat RegressionSpec list, no feature search
     if specs is not None:
         for spec in specs:
-            results[spec.name] = rolling_ols(
-                full_data,
-                predicted_data,
-                RegressionSpec(
-                    name=spec.name,
-                    target=spec.target,
-                    features=tuple(resolve_feature_name(f) for f in spec.features),
-                ),
-                train_size=train_size,
-                **kwargs,
-            )
+            if not _target_available(spec.target):
+                if not quiet:
+                    print(
+                        f"  skip {spec.name}: target '{spec.target}' not in panel",
+                        flush=True,
+                    )
+                continue
+            try:
+                results[spec.name] = rolling_ols(
+                    full_data,
+                    predicted_data,
+                    RegressionSpec(
+                        name=spec.name,
+                        target=spec.target,
+                        features=tuple(resolve_feature_name(f) for f in spec.features),
+                    ),
+                    train_size=train_size,
+                    **kwargs,
+                )
+            except (KeyError, ValueError) as exc:
+                if not quiet:
+                    print(f"  skip {spec.name}: {exc}", flush=True)
         return results
 
     for screen in screens:
+        if not _target_available(screen.target):
+            if not quiet:
+                print(
+                    f"  skip screen {screen.name}: target '{screen.target}' not in panel",
+                    flush=True,
+                )
+            continue
         if tune_features and len(screen.feature_sets) > 0:
             if not quiet:
                 print(flush=True)
@@ -517,8 +546,8 @@ def run_regressions(
                     flush=True,
                 )
                 print(
-                    "  Per fold: err = pred − actual · "
-                    "prediction_accuracy = mean(err) · "
+                    "  Per fold: rel = |pred − actual| / |actual| · "
+                    "prediction_accuracy = mean(rel) · "
                     "pick features closest to 0",
                     flush=True,
                 )
@@ -534,13 +563,17 @@ def run_regressions(
             )
             if not quiet:
                 show = comparison.copy()
-                show["prediction_accuracy"] = show["prediction_accuracy"].round(4)
+                for c in ("mean_error", "mean_value", "prediction_accuracy"):
+                    if c in show.columns:
+                        show[c] = show[c].round(4)
                 print(show.to_string(index=False), flush=True)
                 print(flush=True)
                 print(
                     f"  →  chosen features = {_features_label(best_feats)}    "
                     f"prediction_accuracy = "
-                    f"{best_res.overall.get('prediction_accuracy', float('nan')):.4f}",
+                    f"{best_res.overall.get('prediction_accuracy', float('nan')):.4f}  "
+                    f"(mean_error={best_res.overall.get('mean_error', float('nan')):.4f}, "
+                    f"mean_value={best_res.overall.get('mean_value', float('nan')):.4f})",
                     flush=True,
                 )
                 print(flush=True)

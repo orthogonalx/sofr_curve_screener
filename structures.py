@@ -233,22 +233,41 @@ def build_full_data(
     """
     raw = clean_raw_columns(data_raw) if clean else data_raw.copy()
 
-    needed = required_tenors(curves, flies)
     available = {int(c) for c in raw.columns if is_tenor_column(c)}
-    missing = sorted(needed - available)
-    if missing:
-        raise KeyError(
-            f"Raw data missing tenors required by structures: {missing}. "
-            f"Have: {sorted(available)}"
+    available_fwd = {c for c in raw.columns if is_fwd_structure_column(c)}
+
+    # Keep only structures whose legs exist in the panel (skip the rest)
+    curves_ok = [(n, a, b) for n, a, b in curves if a in available and b in available]
+    flies_ok = [
+        (n, a, b, c)
+        for n, a, b, c in flies
+        if a in available and b in available and c in available
+    ]
+    skipped_curves = [n for n, a, b in curves if (n, a, b) not in curves_ok]
+    skipped_flies = [n for n, a, b, c in flies if (n, a, b, c) not in flies_ok]
+    if skipped_curves or skipped_flies:
+        print(
+            f"  skip structures (missing tenors): "
+            f"curves={skipped_curves or '—'}  flies={skipped_flies or '—'}  "
+            f"have_tenors={sorted(available)}",
+            flush=True,
         )
 
-    needed_fwd = required_forwards(fwd_curves, fwd_flies)
-    available_fwd = {c for c in raw.columns if is_fwd_structure_column(c)}
-    missing_fwd = sorted(needed_fwd - available_fwd)
-    if missing_fwd:
-        raise KeyError(
-            f"Raw data missing forwards required by structures: {missing_fwd}. "
-            f"Have: {sorted(available_fwd)}"
+    fwd_curves_ok = [
+        (n, a, b) for n, a, b in fwd_curves if a in available_fwd and b in available_fwd
+    ]
+    fwd_flies_ok = [
+        (n, a, b, c)
+        for n, a, b, c in fwd_flies
+        if a in available_fwd and b in available_fwd and c in available_fwd
+    ]
+    skipped_fc = [n for n, a, b in fwd_curves if (n, a, b) not in fwd_curves_ok]
+    skipped_ff = [n for n, a, b, c in fwd_flies if (n, a, b, c) not in fwd_flies_ok]
+    if skipped_fc or skipped_ff:
+        print(
+            f"  skip fwd structures (missing forwards): "
+            f"curves={skipped_fc or '—'}  flies={skipped_ff or '—'}",
+            flush=True,
         )
 
     pieces: List[pd.Series] = []
@@ -257,9 +276,9 @@ def build_full_data(
     for t in sorted(available):
         pieces.append(raw[str(t)].rename(str(t)))
 
-    for name, a, b in curves:
+    for name, a, b in curves_ok:
         pieces.append(build_curve(raw, name, a, b))
-    for name, a, b, c in flies:
+    for name, a, b, c in flies_ok:
         pieces.append(build_fly(raw, name, a, b, c))
 
     # Forward levels (cleaned S0490FS columns)
@@ -270,11 +289,13 @@ def build_full_data(
     for col in sorted(available_fwd, key=_fwd_key):
         pieces.append(raw[col].rename(col))
 
-    # Forward curves / flies by consecutive groups (1y / 2y / 5y)
-    for name, a, b in fwd_curves:
+    for name, a, b in fwd_curves_ok:
         pieces.append(build_fwd_curve(raw, name, a, b))
-    for name, a, b, c in fwd_flies:
+    for name, a, b, c in fwd_flies_ok:
         pieces.append(build_fwd_fly(raw, name, a, b, c))
+
+    if not pieces:
+        raise ValueError("No structures could be built — check raw tenors/forwards")
 
     full = pd.concat(pieces, axis=1)
     full.index = raw.index
@@ -283,11 +304,11 @@ def build_full_data(
         "fwd levels=%d curves=%d flies=%d | groups=%s | bars=%d",
         full.shape[1],
         len(available),
-        len(curves),
-        len(flies),
+        len(curves_ok),
+        len(flies_ok),
         len(available_fwd),
-        len(fwd_curves),
-        len(fwd_flies),
+        len(fwd_curves_ok),
+        len(fwd_flies_ok),
         {k: len(v) for k, v in FWD_GROUPS.items()},
         len(full),
     )
@@ -303,11 +324,17 @@ def build_predicted_data(
     """
     missing = [c for c in predicted if c not in full_data.columns]
     if missing:
-        raise KeyError(
-            f"Predicted targets not in full_data: {missing}. "
-            f"Add them to CURVES/FLIES in curve_config.py."
+        print(
+            f"  skip predicted targets not in full_data: {missing}",
+            flush=True,
         )
-    pred = full_data.loc[:, list(predicted)].copy()
+    cols = [c for c in predicted if c in full_data.columns]
+    if not cols:
+        raise KeyError(
+            f"None of the PREDICTED targets are in full_data. "
+            f"Wanted {list(predicted)}; have {list(full_data.columns)}"
+        )
+    pred = full_data.loc[:, cols].copy()
     log.info("predicted_data: %s", list(pred.columns))
     return pred
 
