@@ -8,6 +8,7 @@ __pycache__/
 .env
 .venv/
 venv/
+residual_report.csv
 predictions*.csv
 zscore_*.csv
 summary.csv

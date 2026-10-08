@@ -26,6 +26,17 @@ BBG_SUFFIX = "BGN Curncy"
 BBG_FWD_PREFIX = "S0490FS"
 BBG_FWD_SUFFIX = "BLC Curncy"
 
+# Live pull via internal bbgapi (`import bbgapi` → bquery.bdp / bquery.bdh)
+BBG_FIELD = "PX_LAST"
+BBG_REQUEST_REROUTE = True
+
+# History window loaded once into LIVE_STORE_PATH. Live updates append after that.
+# Dates: "YYYYMMDD" or "YYYY-MM-DD". BBG_END_DATE "" = today.
+# BBG_FREQ: "15min", "1h", or "1D" (daily). Sub-daily is sent to bdh as interval minutes.
+BBG_START_DATE = "20240101"
+BBG_END_DATE = ""
+BBG_FREQ = "15min"
+
 # ── Forward grid (start years, gap years) → cleaned name "{start}y{gap}y" ─────
 # 1y gaps: 1y1y … 9y1y
 # 2y gaps: 1y2y … 10y2y
@@ -275,6 +286,8 @@ MIN_TRAIN_OBS = 30                  # skip fit if too few clean rows after NaN d
 
 DATA_BAR_MINUTES = 15               # next-bar horizon (dataset cadence)
 PREDICTION_EMAIL_EVERY_HOURS = 3    # ZZZ: email cadence for run_prediction
+REPORT_EMAIL_EVERY_HOURS = 3        # XXX: scheduled residual-report email
+REFRESH_DATA_ON_REQUEST = True      # pull+append latest bar before each report
 BACKTEST_START = "2024-01-01"       # inclusive
 BACKTEST_END = None                 # None = through last available bar
 
