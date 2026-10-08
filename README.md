@@ -5,6 +5,7 @@ Three modes:
 | Mode | Command | Role |
 |------|---------|------|
 | **Explore** | `python3.8 -u run_pipeline.py` | Compare `REGRESSION_SCREENS` feature sets, pick winners |
+| **Report** | `python3.8 -u run_report.py --once` | Residual table (CHOSEN_MODELS); email loop without `--once` every XXX h |
 | **Prediction** | `python3.8 -u run_prediction.py --once` | Locked `CHOSEN_MODELS` → next-bar forecast (+ email loop without `--once`) |
 | **Backtest** | `python3.8 -u run_backtest.py` | Residual mean-reversion on `CHOSEN_MODELS` (z + \|r\| thr → PnL) |
 
@@ -15,7 +16,7 @@ Optional BBG ingest only: `python3.8 -u run_live.py` (does **not** predict).
 1. Add curves/flies in `CURVES` / `FLIES` (built from outright USOSFR levels).
 2. Explore candidates in `REGRESSION_SCREENS.feature_sets`.
 3. After explore, copy winners into **`CHOSEN_MODELS`** (prediction + backtest use only these).
-4. Cadence: `DATA_BAR_MINUTES` (next bar ~15m), `PREDICTION_EMAIL_EVERY_HOURS` (ZZZ), `TRAIN_SIZE` (k).
+4. Cadence: `DATA_BAR_MINUTES` (next bar ~15m), `REPORT_EMAIL_EVERY_HOURS` (XXX report email), `PREDICTION_EMAIL_EVERY_HOURS` (ZZZ), `TRAIN_SIZE` (k).
 
 ## Data
 

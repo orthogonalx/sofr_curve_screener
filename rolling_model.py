@@ -462,17 +462,19 @@ def fit_predict_next(
         "y_hat_now": y_hat_now,
         "residual": y_true_now - y_hat_now,
         "y_hat_next": y_hat_next,
+        "train_start": y_all.index[tr0],
+        "train_end": y_all.index[tr1 - 1],
         "equation": equation_from_beta(
-            resolved.target, resolved.features, beta_next, add_intercept=add_intercept
+            resolved.target, resolved.features, beta_now, add_intercept=add_intercept
         ),
     }
     if add_intercept:
-        row["intercept"] = float(beta_next[0])
+        row["intercept"] = float(beta_now[0])
         for j, fname in enumerate(resolved.features):
-            row[f"beta_{fname}"] = float(beta_next[j + 1])
+            row[f"beta_{fname}"] = float(beta_now[j + 1])
     else:
         for j, fname in enumerate(resolved.features):
-            row[f"beta_{fname}"] = float(beta_next[j])
+            row[f"beta_{fname}"] = float(beta_now[j])
     return row
 
 

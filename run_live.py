@@ -1,24 +1,27 @@
 #!/usr/bin/env python3
 """
-Optional Bloomberg ingest only — NOT the prediction path.
+Live ingest.
 
-  every DATA_UPDATE_HOURS → pull 1 BBG row, append to sofr_live.csv, trim oldest
+  If sofr_live.csv is missing → pull [BBG_START_DATE, BBG_END_DATE] at BBG_FREQ.
+  Then every DATA_UPDATE_HOURS → pull the latest print and append it.
 
-Predictions + email live in run_prediction.py (reads the store; no ingest).
-Replace bbg_pull.fetch_bloomberg_latest with your real Bloomberg call.
+Reports read that same file (run_report.py does the same append on each run).
 """
 
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from curve_config import (
+    BBG_END_DATE,
+    BBG_FREQ,
+    BBG_START_DATE,
     DATA_UPDATE_HOURS,
     LIVE_STORE_PATH,
-    MAX_HISTORY_BARS,
 )
-from bbg_pull import fetch_bloomberg_latest
-from live_store import append_snapshot, ensure_seed_history
+from bbg_pull import append_live_bar, pull_history_into_store
+from live_store import load_live_store
 
 
 def _hours_to_seconds(h: float) -> float:
@@ -26,21 +29,21 @@ def _hours_to_seconds(h: float) -> float:
 
 
 def tick_ingest() -> None:
-    snap = fetch_bloomberg_latest()
-    panel = append_snapshot(snap, path=LIVE_STORE_PATH, max_bars=MAX_HISTORY_BARS)
-    print(
-        f"[ingest] +1 → {LIVE_STORE_PATH}  n={len(panel)}  "
-        f"last={panel.index[-1]}",
-        flush=True,
-    )
+    append_live_bar()
 
 
 def main() -> None:
-    ensure_seed_history(LIVE_STORE_PATH)
+    store = Path(LIVE_STORE_PATH)
+    existing = load_live_store(store) if store.exists() else None
+    if existing is None or existing.empty:
+        end = BBG_END_DATE or "today"
+        print(
+            f"[history] {BBG_START_DATE} → {end}  freq={BBG_FREQ} → {LIVE_STORE_PATH}",
+            flush=True,
+        )
+        pull_history_into_store()
     print(
-        f"ingest-only: every {DATA_UPDATE_HOURS}h → {LIVE_STORE_PATH} "
-        f"(keep last {MAX_HISTORY_BARS}). "
-        f"Use run_prediction.py for forecasts/email.",
+        f"live: append latest print every {DATA_UPDATE_HOURS}h → {LIVE_STORE_PATH}",
         flush=True,
     )
 
