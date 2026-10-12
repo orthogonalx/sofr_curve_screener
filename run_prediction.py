@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""
-Prediction mode — locked CHOSEN_MODELS only.
-
-Fit on last k bars → y_hat_now (last bar OOS) + y_hat_next (next bar ~ DATA_BAR_MINUTES).
-Dataset is updated outside this script; re-run after each new bar.
-
-  python3.8 -u run_prediction.py --once     # single shot
-  python3.8 -u run_prediction.py            # loop; email every PREDICTION_EMAIL_EVERY_HOURS
-"""
+"""Prediction: refresh live data → CHOSEN_MODELS next-bar forecast."""
 
 from __future__ import annotations
 
@@ -21,25 +13,36 @@ from curve_config import (
     CHOSEN_MODELS,
     DATA_BAR_MINUTES,
     PREDICTION_EMAIL_EVERY_HOURS,
+    REFRESH_DATA_ON_REQUEST,
     TRAIN_SIZE,
 )
-from report_email import send_summary_email
-from screener_core import (
-    append_zscore_latest,
-    build_panel,
-    load_panel,
-    run_chosen_predictions,
-)
+from data import build_panel, load_panel, refresh_live_store
+from models import append_zscore_latest, run_chosen_predictions, send_summary_email
 
 
-def _format_prediction_text(table: pd.DataFrame, asof: str) -> str:
+def run_once(*, refresh: bool = True, force_history: bool = False) -> pd.DataFrame:
+    if refresh or force_history:
+        data_raw, src = refresh_live_store(force_history=force_history)
+    else:
+        data_raw, src = load_panel()
+    _, full, pred = build_panel(data_raw)
+    asof = str(data_raw.index[-1])
+    print(
+        f"prediction  src={src}  n={len(data_raw)}  asof={asof}  "
+        f"models={[m.name for m in CHOSEN_MODELS]}",
+        flush=True,
+    )
+    table = append_zscore_latest(
+        run_chosen_predictions(full, pred, specs=CHOSEN_MODELS, train_size=TRAIN_SIZE),
+        full,
+    )
     show = table.copy()
     for c in ("nivel", "y_hat_now", "residual", "y_hat_next"):
         if c in show.columns:
             show[c] = pd.to_numeric(show[c], errors="coerce").round(4)
     cols = [
         c
-        for c in [
+        for c in (
             "model",
             "structure",
             "features",
@@ -49,31 +52,13 @@ def _format_prediction_text(table: pd.DataFrame, asof: str) -> str:
             "y_hat_next",
             "equation",
             "time",
-        ]
+        )
         if c in show.columns
     ]
-    show = show[cols]
-    header = (
+    text = (
         f"SOFR prediction  |  asof {asof}  |  k={TRAIN_SIZE}  |  "
-        f"next bar ~{DATA_BAR_MINUTES}m"
+        f"next ~{DATA_BAR_MINUTES}m\n\n{show[cols].to_string(index=False)}\n"
     )
-    return header + "\n\n" + show.to_string(index=False) + "\n"
-
-
-def run_once() -> pd.DataFrame:
-    data_raw, src = load_panel()
-    _, full_data, predicted_data = build_panel(data_raw)
-    asof = str(data_raw.index[-1])
-    print(
-        f"prediction  src={src}  n={len(data_raw)}  asof={asof}  "
-        f"models={[m.name for m in CHOSEN_MODELS]}",
-        flush=True,
-    )
-    table = run_chosen_predictions(
-        full_data, predicted_data, specs=CHOSEN_MODELS, train_size=TRAIN_SIZE
-    )
-    table = append_zscore_latest(table, full_data)
-    text = _format_prediction_text(table, asof=asof)
     print(text, flush=True)
     Path("predictions_latest.csv").write_text(table.to_csv(index=False))
     table.attrs["asof"] = asof
@@ -82,41 +67,30 @@ def run_once() -> pd.DataFrame:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="SOFR locked-model prediction")
-    parser.add_argument(
-        "--once",
-        action="store_true",
-        help="Run one prediction and exit (no email loop)",
-    )
-    args = parser.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument("--once", action="store_true")
+    p.add_argument("--no-refresh", action="store_true")
+    p.add_argument("--pull-history", action="store_true")
+    args = p.parse_args()
+    refresh = REFRESH_DATA_ON_REQUEST and not args.no_refresh
+
+    def _tick() -> None:
+        t = run_once(refresh=refresh, force_history=args.pull_history)
+        send_summary_email(
+            t,
+            asof=t.attrs.get("asof", ""),
+            subject=f"SOFR prediction {t.attrs.get('asof', '')}",
+            body=t.attrs.get("text"),
+        )
 
     if args.once:
-        table = run_once()
-        asof = table.attrs.get("asof", "")
-        send_summary_email(
-            table,
-            asof=asof,
-            subject=f"SOFR prediction {asof}",
-            body=table.attrs.get("text"),
-        )
+        _tick()
         return
-
     every = max(float(PREDICTION_EMAIL_EVERY_HOURS), 0.01) * 3600.0
-    print(
-        f"prediction loop: refresh + email every {PREDICTION_EMAIL_EVERY_HOURS}h "
-        f"(dataset updated externally every ~{DATA_BAR_MINUTES}m)",
-        flush=True,
-    )
+    print(f"prediction loop every {PREDICTION_EMAIL_EVERY_HOURS}h", flush=True)
     while True:
         try:
-            table = run_once()
-            asof = table.attrs.get("asof", "")
-            send_summary_email(
-                table,
-                asof=asof,
-                subject=f"SOFR prediction {asof}",
-                body=table.attrs.get("text"),
-            )
+            _tick()
         except Exception as exc:  # noqa: BLE001
             print(f"[prediction] ERROR {exc}", flush=True)
         time.sleep(every)
