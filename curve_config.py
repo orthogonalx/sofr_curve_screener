@@ -26,17 +26,18 @@ BBG_SUFFIX = "BGN Curncy"
 BBG_FWD_PREFIX = "S0490FS"
 BBG_FWD_SUFFIX = "BLC Curncy"
 
-# Live pull via bbgapi (jumpstart):
+# Live pull via bbgapi bdib (intraday bars) — same pattern as desk Ticker Extract:
 #   from bbgapi.query import BlpQuery
 #   bquery = BlpQuery().start()
-#   bquery.bdh(securities=..., fields=['PX_LAST'], start_date='YYYYMMDD', end_date='YYYYMMDD')
-BBG_FIELD = "PX_LAST"
+#   bars = bquery.bdib(security=sec, event_type="TRADE", interval=180,
+#                      start_datetime="YYYY-MM-DDTHH:MM:SS",
+#                      end_datetime="YYYY-MM-DDTHH:MM:SS")
+#   close = bars.set_index("time")["close"]
+BBG_EVENT_TYPE = "TRADE"
+BBG_INTERVAL_MINUTES = 180          # 3h bars (matches sofr_3h / desk extract)
+BBG_START_DATE = "20240101"         # history start (YYYYMMDD or YYYY-MM-DD)
+BBG_END_DATE = ""                   # "" = now
 
-# History window → LIVE_STORE_PATH. Dates "YYYYMMDD"; BBG_END_DATE "" = today.
-# BBG_FREQ: "1D" (daily, jumpstart default), "15min", or "1h".
-BBG_START_DATE = "20240101"
-BBG_END_DATE = ""
-BBG_FREQ = "1D"
 
 # ── Forward grid (start years, gap years) → cleaned name "{start}y{gap}y" ─────
 # 1y gaps: 1y1y … 9y1y
@@ -285,7 +286,7 @@ STEP_SIZE = 1                       # then roll the window by one bar
 ADD_INTERCEPT = True
 MIN_TRAIN_OBS = 30                  # skip fit if too few clean rows after NaN drop
 
-DATA_BAR_MINUTES = 15               # next-bar horizon (dataset cadence)
+DATA_BAR_MINUTES = BBG_INTERVAL_MINUTES  # next-bar horizon (= bdib interval)
 PREDICTION_EMAIL_EVERY_HOURS = 3    # loop / email cadence for run_prediction
 REFRESH_DATA_ON_REQUEST = True      # BBG refresh before each prediction
 BACKTEST_START = "2024-01-01"       # inclusive
