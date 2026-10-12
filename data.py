@@ -1,6 +1,7 @@
 """Data layer: load/live store, structure building, Bloomberg pull, panel loaders."""
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -232,6 +233,38 @@ def build_datasets(data_raw: pd.DataFrame, curves=CURVES, flies=FLIES,
 
 _BQ = None
 _DT_FMT = "%Y-%m-%dT%H:%M:%S"
+_BBG_LOG_NAMES = (
+    "bbgapi",
+    "blpapi",
+    "dz",
+    "dzparts",
+    "datazone",
+    "urllib3",
+    "requests",
+    "ms",
+    "BBGActivityTracker",
+    "logging_service",
+)
+
+
+def _quiet_bbg_logs() -> None:
+    """Silence INFO spam from bbgapi (shows as red/pink blocks in Jupyter)."""
+    logging.basicConfig(level=logging.ERROR)
+    root = logging.getLogger()
+    root.setLevel(logging.ERROR)
+    for h in list(root.handlers):
+        h.setLevel(logging.ERROR)
+    names = set(_BBG_LOG_NAMES) | set(logging.root.manager.loggerDict)
+    for name in names:
+        low = str(name).lower()
+        if name in _BBG_LOG_NAMES or any(
+            k in low for k in ("bbg", "blp", "dz", "datazone", "activity", "kerberos")
+        ):
+            lg = logging.getLogger(name)
+            lg.setLevel(logging.ERROR)
+            lg.propagate = False
+            for h in list(lg.handlers):
+                h.setLevel(logging.ERROR)
 
 
 def _securities() -> List[str]:
@@ -246,6 +279,7 @@ def _bquery():
     global _BQ
     if _BQ is not None:
         return _BQ
+    _quiet_bbg_logs()
     try:
         from bbgapi.query import BlpQuery
     except ImportError as exc:
@@ -254,6 +288,7 @@ def _bquery():
             "`from bbgapi.query import BlpQuery; BlpQuery().start()`."
         ) from exc
     _BQ = BlpQuery().start()
+    _quiet_bbg_logs()  # again after start() (handlers may reappear)
     return _BQ
 
 
