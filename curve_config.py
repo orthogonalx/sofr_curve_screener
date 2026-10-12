@@ -26,16 +26,17 @@ BBG_SUFFIX = "BGN Curncy"
 BBG_FWD_PREFIX = "S0490FS"
 BBG_FWD_SUFFIX = "BLC Curncy"
 
-# Live pull via internal bbgapi (`import bbgapi` → bquery.bdp / bquery.bdh)
+# Live pull via bbgapi (jumpstart):
+#   from bbgapi.query import BlpQuery
+#   bquery = BlpQuery().start()
+#   bquery.bdh(securities=..., fields=['PX_LAST'], start_date='YYYYMMDD', end_date='YYYYMMDD')
 BBG_FIELD = "PX_LAST"
-BBG_REQUEST_REROUTE = True
 
-# History window loaded once into LIVE_STORE_PATH. Live updates append after that.
-# Dates: "YYYYMMDD" or "YYYY-MM-DD". BBG_END_DATE "" = today.
-# BBG_FREQ: "15min", "1h", or "1D" (daily). Sub-daily is sent to bdh as interval minutes.
+# History window → LIVE_STORE_PATH. Dates "YYYYMMDD"; BBG_END_DATE "" = today.
+# BBG_FREQ: "1D" (daily, jumpstart default), "15min", or "1h".
 BBG_START_DATE = "20240101"
 BBG_END_DATE = ""
-BBG_FREQ = "15min"
+BBG_FREQ = "1D"
 
 # ── Forward grid (start years, gap years) → cleaned name "{start}y{gap}y" ─────
 # 1y gaps: 1y1y … 9y1y

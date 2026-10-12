@@ -10,9 +10,8 @@ import pandas as pd
 
 from curve_config import (
     BBG_END_DATE, BBG_FIELD, BBG_FREQ, BBG_FWD_PREFIX, BBG_FWD_SUFFIX, BBG_PREFIX,
-    BBG_REQUEST_REROUTE, BBG_START_DATE, BBG_SUFFIX, CURVES, DATA_BAR_MINUTES,
-    DATA_PATH, FLIES, FORWARDS, FWD_CURVES, FWD_FLIES, LIVE_STORE_PATH,
-    MAX_HISTORY_BARS, PREDICTED,
+    BBG_START_DATE, BBG_SUFFIX, CURVES, DATA_BAR_MINUTES, DATA_PATH, FLIES,
+    FORWARDS, FWD_CURVES, FWD_FLIES, LIVE_STORE_PATH, MAX_HISTORY_BARS, PREDICTED,
 )
 
 _TENOR_RE = re.compile(rf"^{re.escape(BBG_PREFIX)}(\d+)\s*{re.escape(BBG_SUFFIX)}$", re.I)
@@ -224,7 +223,14 @@ def build_datasets(data_raw: pd.DataFrame, curves=CURVES, flies=FLIES,
     return cleaned, full, build_predicted_data(full, predicted=predicted)
 
 
-# ── Bloomberg pull (bbgapi bdp / bdh) ────────────────────────────────────────
+# ── Bloomberg pull (bbgapi BlpQuery → bdp / bdh) ─────────────────────────────
+# Jumpstart pattern:
+#   from bbgapi.query import BlpQuery
+#   bquery = BlpQuery().start()
+#   bquery.bdh(securities=..., fields=['PX_LAST'], start_date='YYYYMMDD', end_date='YYYYMMDD')
+
+_BQ = None  # cached BlpQuery session
+
 
 def _securities() -> List[str]:
     tenors = set()
@@ -235,18 +241,20 @@ def _securities() -> List[str]:
 
 
 def _bquery():
+    """Same client as bbgapi_jumpstart: BlpQuery().start()."""
+    global _BQ
+    if _BQ is not None:
+        return _BQ
     try:
-        import bbgapi
+        from bbgapi.query import BlpQuery
     except ImportError as exc:
-        raise ImportError("bbgapi is not installed in this Python. "
-                          "Run from the Bloomberg / DataZone environment.") from exc
-    bq = getattr(bbgapi, "bquery", None)
-    if bq is None:
-        try:
-            import bquery as bq
-        except ImportError as exc:
-            raise ImportError("Imported bbgapi but could not find bquery.") from exc
-    return bq
+        raise ImportError(
+            "bbgapi is not installed in this Python. "
+            "Use the DataZone kernel (dzlabs venv) and "
+            "`from bbgapi.query import BlpQuery; BlpQuery().start()`."
+        ) from exc
+    _BQ = BlpQuery().start()
+    return _BQ
 
 
 def _wide(raw, field: str) -> pd.DataFrame:
@@ -268,10 +276,10 @@ def _wide(raw, field: str) -> pd.DataFrame:
 
 
 def freq_kwargs(freq: str) -> dict:
-    """BBG_FREQ → bdh kwargs: '1D' → periodicity DAILY; '15min'/'1h' → interval minutes."""
+    """Optional bdh extras for BBG_FREQ. Daily → {}; intraday → interval minutes if client allows."""
     f = str(freq).strip().lower()
     if f in {"1d", "d", "daily", "1day"}:
-        return {"periodicity": "DAILY"}
+        return {}
     if f.endswith("min"):
         return {"interval": int(f[:-3])}
     if f.endswith("h"):
@@ -280,13 +288,13 @@ def freq_kwargs(freq: str) -> dict:
 
 
 def _bdh(bq, kwargs: dict):
-    """bdh, dropping optional kwargs the installed client rejects (request_reroute retry)."""
+    """bdh like jumpstart; drop optional kwargs the client rejects."""
     kw = dict(kwargs)
     while True:
         try:
             return bq.bdh(**kw)
         except TypeError as exc:
-            key = next((k for k in ("request_reroute", "interval", "periodicity") if k in kw), None)
+            key = next((k for k in ("interval", "periodicity", "request_reroute") if k in kw), None)
             if key is None:
                 raise
             kw.pop(key)
@@ -297,7 +305,7 @@ def _fetch_latest(field: str = BBG_FIELD) -> pd.DataFrame:
     """One live print via bdp → 1-row frame indexed by time."""
     names, bq = _securities(), _bquery()
     try:
-        raw = bq.bdp(names, [field], **({"request_reroute": True} if BBG_REQUEST_REROUTE else {}))
+        raw = bq.bdp(securities=names, fields=[field])
     except TypeError:
         raw = bq.bdp(names, [field])
     wide = _wide(raw, field)
@@ -311,16 +319,19 @@ def _fetch_latest(field: str = BBG_FIELD) -> pd.DataFrame:
 
 
 def _fetch_history(start_date=None, end_date=None, freq=None, field: str = BBG_FIELD) -> pd.DataFrame:
-    """History via bdh for [start, end] at freq (defaults from curve_config)."""
+    """History via bdh — jumpstart kwargs + optional freq extras."""
     start = pd.Timestamp(str(BBG_START_DATE if start_date is None else start_date)).strftime("%Y%m%d")
     end_txt = str(BBG_END_DATE if end_date is None else end_date).strip()
     end = (pd.Timestamp(end_txt) if end_txt else pd.Timestamp.today()).strftime("%Y%m%d")
     freq = BBG_FREQ if freq is None else freq
     names = _securities()
-    kwargs = {"securities": names, "fields": [field], "start_date": start, "end_date": end}
+    kwargs = {
+        "securities": names,
+        "fields": [field],
+        "start_date": start,
+        "end_date": end,
+    }
     kwargs.update(freq_kwargs(freq))
-    if BBG_REQUEST_REROUTE:
-        kwargs["request_reroute"] = True
     print(f"  [bdh] {start} → {end}  freq={freq}  n_securities={len(names)}", flush=True)
 
     wide = _wide(_bdh(_bquery(), kwargs), field)
