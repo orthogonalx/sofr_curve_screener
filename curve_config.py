@@ -285,9 +285,8 @@ ADD_INTERCEPT = True
 MIN_TRAIN_OBS = 30                  # skip fit if too few clean rows after NaN drop
 
 DATA_BAR_MINUTES = 15               # next-bar horizon (dataset cadence)
-PREDICTION_EMAIL_EVERY_HOURS = 3    # ZZZ: email cadence for run_prediction
-REPORT_EMAIL_EVERY_HOURS = 3        # XXX: scheduled residual-report email
-REFRESH_DATA_ON_REQUEST = True      # pull+append latest bar before each report
+PREDICTION_EMAIL_EVERY_HOURS = 3    # loop / email cadence for run_prediction
+REFRESH_DATA_ON_REQUEST = True      # BBG refresh before each prediction
 BACKTEST_START = "2024-01-01"       # inclusive
 BACKTEST_END = None                 # None = through last available bar
 
@@ -307,12 +306,9 @@ BACKTEST_ZSCORE_THR = 1.0           # |z(residual)| entry threshold
 BACKTEST_Z_LOOKBACK = 50            # past bars for residual μ/σ (no look-ahead)
 BACKTEST_POSITION_MODE = "one_bar"  # "one_bar" | "hold"
 
-# ── Optional BBG ingest only (run_live.py) — not used by prediction ───────────
-DATA_UPDATE_HOURS = 1                 # pull frequency if using run_live
-LIVE_STORE_PATH = "sofr_live.csv"     # stacked panel on disk (same folder)
-MAX_HISTORY_BARS = 2000               # rolling window length after each append
-LIVE_TUNE_FEATURES = False            # explore uses run_pipeline; live ingest stays dumb
-LIVE_TUNE_WINDOW = LIVE_TUNE_FEATURES
+# ── Live store (updated by run_prediction refresh) ────────────────────────────
+LIVE_STORE_PATH = "sofr_live.csv"     # stacked panel on disk
+MAX_HISTORY_BARS = 2000               # trim after each append
 
 # Email (override via env: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
 #        REPORT_TO, REPORT_FROM)
