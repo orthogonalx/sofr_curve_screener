@@ -9,9 +9,10 @@ import numpy as np
 import pandas as pd
 
 from curve_config import (
-    BBG_END_DATE, BBG_FIELD, BBG_FREQ, BBG_FWD_PREFIX, BBG_FWD_SUFFIX, BBG_PREFIX,
-    BBG_START_DATE, BBG_SUFFIX, CURVES, DATA_BAR_MINUTES, DATA_PATH, FLIES,
-    FORWARDS, FWD_CURVES, FWD_FLIES, LIVE_STORE_PATH, MAX_HISTORY_BARS, PREDICTED,
+    BBG_END_DATE, BBG_EVENT_TYPE, BBG_FWD_PREFIX, BBG_FWD_SUFFIX,
+    BBG_INTERVAL_MINUTES, BBG_PREFIX, BBG_START_DATE, BBG_SUFFIX, CURVES,
+    DATA_BAR_MINUTES, DATA_PATH, FLIES, FORWARDS, FWD_CURVES, FWD_FLIES,
+    LIVE_STORE_PATH, MAX_HISTORY_BARS, PREDICTED,
 )
 
 _TENOR_RE = re.compile(rf"^{re.escape(BBG_PREFIX)}(\d+)\s*{re.escape(BBG_SUFFIX)}$", re.I)
@@ -223,13 +224,14 @@ def build_datasets(data_raw: pd.DataFrame, curves=CURVES, flies=FLIES,
     return cleaned, full, build_predicted_data(full, predicted=predicted)
 
 
-# ── Bloomberg pull (bbgapi BlpQuery → bdp / bdh) ─────────────────────────────
-# Jumpstart pattern:
-#   from bbgapi.query import BlpQuery
+# ── Bloomberg pull via bdib (desk Ticker Extract pattern) ─────────────────────
 #   bquery = BlpQuery().start()
-#   bquery.bdh(securities=..., fields=['PX_LAST'], start_date='YYYYMMDD', end_date='YYYYMMDD')
+#   bars = bquery.bdib(security=sec, event_type="TRADE", interval=180,
+#                      start_datetime=..., end_datetime=...)
+#   close = bars.set_index("time")["close"]
 
-_BQ = None  # cached BlpQuery session
+_BQ = None
+_DT_FMT = "%Y-%m-%dT%H:%M:%S"
 
 
 def _securities() -> List[str]:
@@ -241,7 +243,6 @@ def _securities() -> List[str]:
 
 
 def _bquery():
-    """Same client as bbgapi_jumpstart: BlpQuery().start()."""
     global _BQ
     if _BQ is not None:
         return _BQ
@@ -249,112 +250,121 @@ def _bquery():
         from bbgapi.query import BlpQuery
     except ImportError as exc:
         raise ImportError(
-            "bbgapi is not installed in this Python. "
-            "Use the DataZone kernel (dzlabs venv) and "
+            "bbgapi missing. Use DataZone kernel + "
             "`from bbgapi.query import BlpQuery; BlpQuery().start()`."
         ) from exc
     _BQ = BlpQuery().start()
     return _BQ
 
 
-def _wide(raw, field: str) -> pd.DataFrame:
-    """Normalize bdp/bdh output to columns = security tickers."""
-    df = raw if isinstance(raw, pd.DataFrame) else pd.DataFrame(raw)
-    df = df.copy()
-    if isinstance(df.columns, pd.MultiIndex):
-        lvl = next((i for i in range(df.columns.nlevels)
-                    if field in {str(v) for v in df.columns.get_level_values(i)}), None)
-        if lvl is None:
-            raise ValueError(f"Field {field!r} not in bdh/bdp columns {df.columns[:5]}")
-        df = df.xs(field, axis=1, level=lvl)
-    if field in df.columns and (df.shape[1] == 1 or (
-            df.index.name != "time" and set(map(str, df.columns)) <= {field, "security"})):
-        s = df[field]
-        df = s.to_frame().T
-        df.columns = s.index
-    return df
+def _as_dt(value, default_now: bool = False) -> pd.Timestamp:
+    text = "" if value is None else str(value).strip()
+    if not text:
+        if default_now:
+            return pd.Timestamp.now().floor("min")
+        raise ValueError("empty Bloomberg datetime")
+    return pd.Timestamp(text)
 
 
-def freq_kwargs(freq: str) -> dict:
-    """Optional bdh extras for BBG_FREQ. Daily → {}; intraday → interval minutes if client allows."""
+def _interval_minutes(freq=None) -> int:
+    """Map config / override → bdib interval minutes."""
+    if freq is None:
+        return int(BBG_INTERVAL_MINUTES)
+    if isinstance(freq, (int, float)):
+        return int(freq)
     f = str(freq).strip().lower()
-    if f in {"1d", "d", "daily", "1day"}:
-        return {}
     if f.endswith("min"):
-        return {"interval": int(f[:-3])}
+        return int(f[:-3])
     if f.endswith("h"):
-        return {"interval": int(float(f[:-1]) * 60)}
-    raise ValueError(f"BBG_FREQ={freq!r} — use '15min', '1h', or '1D'")
+        return int(float(f[:-1]) * 60)
+    if f in {"1d", "d", "daily", "1day"}:
+        return 24 * 60
+    return int(BBG_INTERVAL_MINUTES)
 
 
-def _bdh(bq, kwargs: dict):
-    """bdh like jumpstart; drop optional kwargs the client rejects."""
-    kw = dict(kwargs)
-    while True:
+def _bdib_close(bq, security: str, start: pd.Timestamp, end: pd.Timestamp,
+                interval: int) -> Optional[pd.Series]:
+    """One ticker → close series indexed by time (desk extract)."""
+    bars = bq.bdib(
+        security=security,
+        event_type=BBG_EVENT_TYPE,
+        interval=int(interval),
+        start_datetime=start.strftime(_DT_FMT),
+        end_datetime=end.strftime(_DT_FMT),
+    )
+    if bars is None or (isinstance(bars, pd.DataFrame) and bars.empty):
+        return None
+    df = bars if isinstance(bars, pd.DataFrame) else pd.DataFrame(bars)
+    if "time" not in df.columns or "close" not in df.columns:
+        raise ValueError(
+            f"bdib({security}) expected columns time/close, got {list(df.columns)}"
+        )
+    s = pd.to_numeric(df.set_index("time")["close"], errors="coerce").rename(security)
+    s.index = pd.DatetimeIndex(pd.to_datetime(s.index))
+    if s.index.tz is not None:
+        s.index = s.index.tz_convert("UTC").tz_localize(None)
+    s.index.name = "time"
+    return s.sort_index()
+
+
+def _fetch_bdib_panel(start_date=None, end_date=None, freq=None,
+                      securities: Optional[Sequence[str]] = None) -> pd.DataFrame:
+    """
+    Loop securities with bdib → wide panel (index=time, columns=tickers).
+    Same logic as the working Ticker Extract notebook.
+    """
+    start = _as_dt(BBG_START_DATE if start_date is None else start_date)
+    end = _as_dt(BBG_END_DATE if end_date is None else end_date, default_now=True)
+    interval = _interval_minutes(freq)
+    names = list(securities) if securities is not None else _securities()
+    bq = _bquery()
+    print(
+        f"  [bdib] {start} → {end}  interval={interval}m  event={BBG_EVENT_TYPE}  "
+        f"n_securities={len(names)}",
+        flush=True,
+    )
+    series_list: List[pd.Series] = []
+    for i, sec in enumerate(names, 1):
         try:
-            return bq.bdh(**kw)
-        except TypeError as exc:
-            key = next((k for k in ("interval", "periodicity", "request_reroute") if k in kw), None)
-            if key is None:
-                raise
-            kw.pop(key)
-            print(f"  [bdh] client rejected {key} ({exc}); retrying", flush=True)
+            s = _bdib_close(bq, sec, start, end, interval)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [bdib] skip {sec}: {exc}", flush=True)
+            continue
+        if s is None or s.empty:
+            print(f"  [bdib] empty {sec}", flush=True)
+            continue
+        series_list.append(s)
+        if i == 1 or i == len(names) or i % 10 == 0:
+            print(f"  [bdib] {i}/{len(names)}  last={sec}  bars={len(s)}", flush=True)
+    if not series_list:
+        raise ValueError("bdib returned no series for any security")
+    panel = pd.concat(series_list, axis=1).sort_index()
+    panel.index.name = "time"
+    print(
+        f"  [bdib] panel n={len(panel)} cols={panel.shape[1]}  "
+        f"{panel.index[0]} → {panel.index[-1]}",
+        flush=True,
+    )
+    return panel
 
 
-def _fetch_latest(field: str = BBG_FIELD) -> pd.DataFrame:
-    """One live print via bdp → 1-row frame indexed by time."""
-    names, bq = _securities(), _bquery()
-    try:
-        raw = bq.bdp(securities=names, fields=[field])
-    except TypeError:
-        raw = bq.bdp(names, [field])
-    wide = _wide(raw, field)
-    if len(wide) != 1:
-        if wide.shape[0] > 1 and wide.shape[1] == 1:
-            wide = wide.T
-        wide = wide.iloc[[-1]]
-    asof = pd.Timestamp.now().floor(f"{int(DATA_BAR_MINUTES)}min")
-    wide.index = pd.DatetimeIndex([asof], name="time")
-    return wide.apply(pd.to_numeric, errors="coerce")
+def _fetch_history(start_date=None, end_date=None, freq=None) -> pd.DataFrame:
+    return _fetch_bdib_panel(start_date=start_date, end_date=end_date, freq=freq)
 
 
-def _fetch_history(start_date=None, end_date=None, freq=None, field: str = BBG_FIELD) -> pd.DataFrame:
-    """History via bdh — jumpstart kwargs + optional freq extras."""
-    start = pd.Timestamp(str(BBG_START_DATE if start_date is None else start_date)).strftime("%Y%m%d")
-    end_txt = str(BBG_END_DATE if end_date is None else end_date).strip()
-    end = (pd.Timestamp(end_txt) if end_txt else pd.Timestamp.today()).strftime("%Y%m%d")
-    freq = BBG_FREQ if freq is None else freq
-    names = _securities()
-    kwargs = {
-        "securities": names,
-        "fields": [field],
-        "start_date": start,
-        "end_date": end,
-    }
-    kwargs.update(freq_kwargs(freq))
-    print(f"  [bdh] {start} → {end}  freq={freq}  n_securities={len(names)}", flush=True)
-
-    wide = _wide(_bdh(_bquery(), kwargs), field)
-    idx = pd.DatetimeIndex(pd.to_datetime(wide.index))
-    if idx.tz is not None:
-        idx = idx.tz_convert("UTC").tz_localize(None)
-    idx.name = "time"
-    wide.index = idx
-    wide = wide.apply(pd.to_numeric, errors="coerce").sort_index()
-
-    # If the API returned bars finer than freq, keep the last print per bar.
-    mins = freq_kwargs(freq).get("interval")
-    if mins and len(wide) >= 3:
-        spacing = wide.index.to_series().diff().dt.total_seconds().median()
-        if not pd.isna(spacing) and spacing < mins * 60 * 0.9:
-            wide = wide.resample(f"{mins}min").last().dropna(how="all")
-            wide.index.name = "time"
-    return wide
+def _fetch_latest() -> pd.DataFrame:
+    """Latest bar: short bdib window → last row (same close source as history)."""
+    end = pd.Timestamp.now().floor("min")
+    start = end - pd.Timedelta(days=5)
+    panel = _fetch_bdib_panel(start_date=start, end_date=end, freq=BBG_INTERVAL_MINUTES)
+    if panel.empty:
+        raise ValueError("bdib latest window empty")
+    return panel.iloc[[-1]]
 
 
 def pull_history_into_store(path: Optional[str] = None, start_date=None, end_date=None,
                             freq=None) -> pd.DataFrame:
-    """Pull [BBG_START_DATE, BBG_END_DATE] at BBG_FREQ and write the live store."""
+    """Pull history via bdib and write LIVE_STORE_PATH."""
     dest = path or LIVE_STORE_PATH
     hist = _fetch_history(start_date, end_date, freq)
     if hist.empty:
@@ -365,19 +375,23 @@ def pull_history_into_store(path: Optional[str] = None, start_date=None, end_dat
 
 
 def append_live_bar(max_bars: int = MAX_HISTORY_BARS) -> pd.DataFrame:
-    """Pull the latest print and append it onto the live store."""
+    """Pull latest bdib bar and append onto the live store."""
     panel = append_snapshot(_fetch_latest(), path=LIVE_STORE_PATH, max_bars=max_bars)
     print(f"  [live] +1 → {LIVE_STORE_PATH}  n={len(panel)}  last={panel.index[-1]}", flush=True)
     return panel
 
 
 def refresh_live_store(force_history: bool = False) -> Tuple[pd.DataFrame, str]:
-    """bdh history if store empty/forced, then bdp latest append; fallback to load_panel."""
+    """History if store empty/forced, then append latest bar; fallback to load_panel."""
     store = Path(LIVE_STORE_PATH)
     try:
         existing = load_live_store(store) if store.exists() else pd.DataFrame()
         if force_history or existing.empty:
-            print(f"  [history] {BBG_START_DATE} → {BBG_END_DATE or 'today'}  freq={BBG_FREQ}", flush=True)
+            print(
+                f"  [history] {BBG_START_DATE} → {BBG_END_DATE or 'now'}  "
+                f"interval={BBG_INTERVAL_MINUTES}m",
+                flush=True,
+            )
             pull_history_into_store()
         return append_live_bar(), f"live:{store}"
     except Exception as exc:  # noqa: BLE001
@@ -397,7 +411,7 @@ def load_panel() -> Tuple[pd.DataFrame, str]:
         return load_live_store(live), f"live:{live}"
     if path.exists():
         return load_raw(path), f"file:{path}"
-    return generate_synthetic_sofr(n_bars=400, freq="15T"), "synthetic"
+    return generate_synthetic_sofr(n_bars=400, freq=f"{int(DATA_BAR_MINUTES)}min"), "synthetic"
 
 
 def build_panel(data_raw: pd.DataFrame):
