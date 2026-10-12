@@ -19,8 +19,14 @@ from curve_config import (
 from data import build_panel, load_panel, refresh_live_store
 from models import append_zscore_latest, run_chosen_predictions, send_summary_email
 
+# Last-run metadata (avoid DataFrame.attrs — missing on pandas 0.25 / DataZone)
+LAST_ASOF = ""
+LAST_TEXT = ""
+
 
 def run_once(*, refresh: bool = True, force_history: bool = False) -> pd.DataFrame:
+    global LAST_ASOF, LAST_TEXT
+
     if refresh or force_history:
         data_raw, src = refresh_live_store(force_history=force_history)
     else:
@@ -61,8 +67,8 @@ def run_once(*, refresh: bool = True, force_history: bool = False) -> pd.DataFra
     )
     print(text, flush=True)
     Path("predictions_latest.csv").write_text(table.to_csv(index=False))
-    table.attrs["asof"] = asof
-    table.attrs["text"] = text
+    LAST_ASOF = asof
+    LAST_TEXT = text
     return table
 
 
@@ -78,9 +84,9 @@ def main() -> None:
         t = run_once(refresh=refresh, force_history=args.pull_history)
         send_summary_email(
             t,
-            asof=t.attrs.get("asof", ""),
-            subject=f"SOFR prediction {t.attrs.get('asof', '')}",
-            body=t.attrs.get("text"),
+            asof=LAST_ASOF,
+            subject="SOFR prediction %s" % LAST_ASOF,
+            body=LAST_TEXT,
         )
 
     if args.once:
