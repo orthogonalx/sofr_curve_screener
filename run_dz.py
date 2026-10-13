@@ -247,6 +247,18 @@ def _bootstrap() -> None:
     print("  [dz] bootstrap ok  python=%s" % sys.executable, flush=True)
 
 
+def bootstrap_for_repo(repo_path: str | None = None) -> None:
+    """Jupyter: chdir + sys.path + ms.version/bbgapi bootstrap (same as terminal launcher)."""
+    if repo_path:
+        root = os.path.abspath(repo_path)
+    else:
+        root = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(root)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    _bootstrap()
+
+
 def main(argv=None) -> None:
     # Always run from repo root (where this file lives)
     root = os.path.dirname(os.path.abspath(__file__))
