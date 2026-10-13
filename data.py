@@ -12,9 +12,9 @@ import pandas as pd
 
 from curve_config import (
     BBG_END_DATE, BBG_EVENT_TYPE, BBG_FWD_PREFIX, BBG_FWD_SUFFIX,
-    BBG_INTERVAL_MINUTES, BBG_PREFIX, BBG_START_DATE, BBG_SUFFIX, BBGAPI_VERSION,
-    CURVES, DATA_BAR_MINUTES, DATA_PATH, FLIES, FORWARDS, FWD_CURVES, FWD_FLIES,
-    LIVE_STORE_PATH, MAX_HISTORY_BARS, PREDICTED,
+    BBG_INTERVAL_MINUTES, BBG_PREFIX, BBG_START_DATE, BBG_SUFFIX,
+    BBGAPI_PATH, BBGAPI_VERSION, CURVES, DATA_BAR_MINUTES, DATA_PATH, FLIES,
+    FORWARDS, FWD_CURVES, FWD_FLIES, LIVE_STORE_PATH, MAX_HISTORY_BARS, PREDICTED,
 )
 
 _TENOR_RE = re.compile(rf"^{re.escape(BBG_PREFIX)}(\d+)\s*{re.escape(BBG_SUFFIX)}$", re.I)
@@ -281,53 +281,100 @@ def _securities() -> List[str]:
             + [f"{BBG_FWD_PREFIX} {int(s)}Y{int(g)}Y {BBG_FWD_SUFFIX}" for s, g in FORWARDS])
 
 
+def _try_import_bbgapi():
+    import importlib
+    importlib.invalidate_caches()
+    if "bbgapi" in sys.modules:
+        del sys.modules["bbgapi"]
+    import bbgapi  # noqa: F401
+    return bbgapi
+
+
+def _add_bbgapi_deps(ms_version) -> None:
+    """Deps from bbgapi_jumpstart.bbgapi_dependencies()."""
+    ms_version.addpkg("blpapi", "3.16.5", shadow=True)
+    ms_version.addpkg("toml", "0.10.1")
+    ms_version.addpkg("requests", "2.26.0", shadow=True)
+    ms_version.addpkg("retrying", "1.3.3")
+    ms_version.addpkg("requests-kerberos", "0.14.0")
+    ms_version.addpkg("pyspnego", "0.3.1")
+    ms_version.addpkg("cryptography", "3.4.8")
+    if sys.platform != "win32":
+        ms_version.addpkg("gssapi", "1.6.5")
+        ms_version.addpkg("krb5", "0.2.0")
+        ms_version.addpkg("python-scvlib", "1.0.25", meta="sec")
+        ms_version.addpkg("cffi", "1.14.5")
+        ms_version.addpkg("PyJWT", "1.5.3")
+
+
 def _ensure_bbgapi() -> None:
     """
-    Load bbgapi the DataZone way (terminal has no bbgapi on PATH by default).
+    Load bbgapi for terminal/notebook on DataZone.
 
-    Same as jumpstart notebook:
-      ms.version.addpkg('bbgapi', VERSION, meta='datazone')
-      + blpapi / kerberos deps
+    Order:
+      1) already importable
+      2) optional BBGAPI_PATH on sys.path
+      3) ms.version.addpkg (try several versions) + jumpstart deps
     """
     try:
-        import bbgapi  # noqa: F401
+        _try_import_bbgapi()
         return
     except ImportError:
         pass
+
+    # Manual path override (from notebook: print(bbgapi.__file__))
+    path = str(BBGAPI_PATH or "").strip()
+    if path:
+        p = Path(path)
+        if p.is_file():
+            p = p.parent
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+        try:
+            _try_import_bbgapi()
+            print(f"  [bbgapi] loaded from BBGAPI_PATH={p}", flush=True)
+            return
+        except ImportError:
+            pass
 
     try:
         import ms.version
     except ImportError as exc:
         raise ImportError(
-            "bbgapi not installed and ms.version unavailable. "
-            "On DataZone terminal use the host python that has `ms` "
-            "(same stack as notebooks), then retry."
+            "bbgapi not installed and ms.version unavailable.\n"
+            "In a working notebook run:\n"
+            "  import sys, bbgapi\n"
+            "  print(sys.executable)\n"
+            "  print(bbgapi.__file__)\n"
+            "Use that python in terminal, or set curve_config.BBGAPI_PATH."
         ) from exc
 
-    print(f"  [bbgapi] loading via ms.version  v={BBGAPI_VERSION}", flush=True)
-    ms.version.addpkg("bbgapi", BBGAPI_VERSION, meta="datazone")
-    # deps from bbgapi_jumpstart.bbgapi_dependencies()
-    ms.version.addpkg("blpapi", "3.16.5", shadow=True)
-    ms.version.addpkg("toml", "0.10.1")
-    ms.version.addpkg("requests", "2.26.0", shadow=True)
-    ms.version.addpkg("retrying", "1.3.3")
-    ms.version.addpkg("requests-kerberos", "0.14.0")
-    ms.version.addpkg("pyspnego", "0.3.1")
-    ms.version.addpkg("cryptography", "3.4.8")
-    if sys.platform != "win32":
-        ms.version.addpkg("gssapi", "1.6.5")
-        ms.version.addpkg("krb5", "0.2.0")
-        ms.version.addpkg("python-scvlib", "1.0.25", meta="sec")
-        ms.version.addpkg("cffi", "1.14.5")
-        ms.version.addpkg("PyJWT", "1.5.3")
+    last_err: Optional[BaseException] = None
+    versions = []
+    for v in (BBGAPI_VERSION, "prod", "latest", "2022.09.26-2"):
+        if v and v not in versions:
+            versions.append(v)
 
-    try:
-        import bbgapi  # noqa: F401
-    except ImportError as exc:
-        raise ImportError(
-            "ms.version.addpkg('bbgapi') ran but import still fails. "
-            "Check BBGAPI_VERSION in curve_config / DataZone access."
-        ) from exc
+    for ver in versions:
+        try:
+            print(f"  [bbgapi] ms.version.addpkg  v={ver!r}", flush=True)
+            _add_bbgapi_deps(ms.version)
+            ms.version.addpkg("bbgapi", ver, meta="datazone")
+            _try_import_bbgapi()
+            print(f"  [bbgapi] import OK  v={ver!r}", flush=True)
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            print(f"  [bbgapi] failed v={ver!r}: {exc}", flush=True)
+
+    raise ImportError(
+        "Could not import bbgapi after ms.version.addpkg.\n"
+        "Fix (notebook that already works):\n"
+        "  import sys, bbgapi\n"
+        "  print(sys.executable)      # use THIS python in terminal\n"
+        "  print(bbgapi.__file__)     # parent dir → curve_config.BBGAPI_PATH\n"
+        f"Last error: {last_err!r}"
+    ) from last_err
 
 
 def _bquery():

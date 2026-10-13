@@ -39,8 +39,13 @@ BBG_INTERVAL_MINUTES = 180          # 3h bars
 MAX_HISTORY_DAYS = 100              # keep ~100 days on disk / in the history pull
 BBG_START_DATE = (datetime.now() - timedelta(days=MAX_HISTORY_DAYS)).strftime("%Y%m%d")
 BBG_END_DATE = ""                   # "" = now (most recent)
-# DataZone: bbgapi is not on sys.path until ms.version.addpkg (same as jumpstart notebook)
+# DataZone: bbgapi is not on sys.path until ms.version.addpkg (same as jumpstart notebook).
+# If addpkg+import still fails in terminal, paste the path from a notebook cell:
+#   import bbgapi; print(bbgapi.__file__)
+# into BBGAPI_PATH (directory that contains the bbgapi package), e.g.:
+#   BBGAPI_PATH = "/ms/dist/datazone/PROJ/bbgapi/2022.09.26-2/lib/python3.7/site-packages"
 BBGAPI_VERSION = "2022.09.26-2"
+BBGAPI_PATH = ""                      # optional absolute site-packages dir
 
 
 # ── Forward grid (start years, gap years) → cleaned name "{start}y{gap}y" ─────
