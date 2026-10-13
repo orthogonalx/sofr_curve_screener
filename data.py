@@ -350,20 +350,35 @@ def _add_bbgapi_deps(ms_version) -> None:
     _addpkg_versions(
         ms_version,
         "urllib3",
-        ("1.26.7", "1.26.6", "1.26.5", "1.26.4", "1.25.11", "1.25.10", "1.24.3", "prod", "latest"),
+        ("prod", "latest", "1.26.7", "1.26.6", "1.26.5", "1.26.4", "1.25.11", "1.25.10", "1.24.3"),
     )
     for name, versions, kw in (
-        ("certifi", ("2021.10.8", "2020.12.5", "prod", "latest"), {}),
-        ("idna", ("3.3", "2.10", "prod", "latest"), {}),
-        ("chardet", ("4.0.0", "3.0.4", "prod", "latest"), {}),
-        ("charset-normalizer", ("2.0.7", "2.0.12", "prod", "latest"), {}),
-        ("blpapi", ("3.16.5", "3.15.2", "prod", "latest"), {"shadow": True}),
-        ("toml", ("0.10.1", "0.10.2", "prod", "latest"), {}),
-        ("requests", ("2.26.0", "2.25.1", "2.22.0", "prod", "latest"), {"shadow": True}),
-        ("retrying", ("1.3.3", "prod", "latest"), {}),
-        ("requests-kerberos", ("0.14.0", "0.12.0", "prod", "latest"), {}),
-        ("pyspnego", ("0.3.1", "0.1.5", "prod", "latest"), {}),
-        ("cryptography", ("3.4.8", "3.3.2", "prod", "latest"), {}),
+        (
+            "certifi",
+            (
+                "prod",
+                "latest",
+                "2021.10.8",
+                "2021.5.30",
+                "2020.12.5",
+                "2020.6.20",
+                "2019.11.28",
+                "2022.12.7",
+                "2022.9.24",
+                "2023.7.22",
+            ),
+            {},
+        ),
+        ("idna", ("prod", "latest", "3.3", "3.2", "2.10", "2.9", "2.8"), {}),
+        ("chardet", ("prod", "latest", "4.0.0", "3.0.4"), {}),
+        ("charset-normalizer", ("prod", "latest", "2.0.7", "2.0.12", "2.0.4"), {}),
+        ("blpapi", ("prod", "latest", "3.16.5", "3.15.2"), {"shadow": True}),
+        ("toml", ("prod", "latest", "0.10.1", "0.10.2"), {}),
+        ("requests", ("prod", "latest", "2.26.0", "2.25.1", "2.22.0", "2.21.0"), {"shadow": True}),
+        ("retrying", ("prod", "latest", "1.3.3"), {}),
+        ("requests-kerberos", ("prod", "latest", "0.14.0", "0.12.0"), {}),
+        ("pyspnego", ("prod", "latest", "0.3.1", "0.1.5"), {}),
+        ("cryptography", ("prod", "latest", "3.4.8", "3.3.2"), {}),
     ):
         _addpkg_versions(ms_version, name, versions, kw)
     if sys.platform != "win32":
