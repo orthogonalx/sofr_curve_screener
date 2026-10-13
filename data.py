@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -11,8 +12,8 @@ import pandas as pd
 
 from curve_config import (
     BBG_END_DATE, BBG_EVENT_TYPE, BBG_FWD_PREFIX, BBG_FWD_SUFFIX,
-    BBG_INTERVAL_MINUTES, BBG_PREFIX, BBG_START_DATE, BBG_SUFFIX, CURVES,
-    DATA_BAR_MINUTES, DATA_PATH, FLIES, FORWARDS, FWD_CURVES, FWD_FLIES,
+    BBG_INTERVAL_MINUTES, BBG_PREFIX, BBG_START_DATE, BBG_SUFFIX, BBGAPI_VERSION,
+    CURVES, DATA_BAR_MINUTES, DATA_PATH, FLIES, FORWARDS, FWD_CURVES, FWD_FLIES,
     LIVE_STORE_PATH, MAX_HISTORY_BARS, PREDICTED,
 )
 
@@ -280,18 +281,62 @@ def _securities() -> List[str]:
             + [f"{BBG_FWD_PREFIX} {int(s)}Y{int(g)}Y {BBG_FWD_SUFFIX}" for s, g in FORWARDS])
 
 
+def _ensure_bbgapi() -> None:
+    """
+    Load bbgapi the DataZone way (terminal has no bbgapi on PATH by default).
+
+    Same as jumpstart notebook:
+      ms.version.addpkg('bbgapi', VERSION, meta='datazone')
+      + blpapi / kerberos deps
+    """
+    try:
+        import bbgapi  # noqa: F401
+        return
+    except ImportError:
+        pass
+
+    try:
+        import ms.version
+    except ImportError as exc:
+        raise ImportError(
+            "bbgapi not installed and ms.version unavailable. "
+            "On DataZone terminal use the host python that has `ms` "
+            "(same stack as notebooks), then retry."
+        ) from exc
+
+    print(f"  [bbgapi] loading via ms.version  v={BBGAPI_VERSION}", flush=True)
+    ms.version.addpkg("bbgapi", BBGAPI_VERSION, meta="datazone")
+    # deps from bbgapi_jumpstart.bbgapi_dependencies()
+    ms.version.addpkg("blpapi", "3.16.5", shadow=True)
+    ms.version.addpkg("toml", "0.10.1")
+    ms.version.addpkg("requests", "2.26.0", shadow=True)
+    ms.version.addpkg("retrying", "1.3.3")
+    ms.version.addpkg("requests-kerberos", "0.14.0")
+    ms.version.addpkg("pyspnego", "0.3.1")
+    ms.version.addpkg("cryptography", "3.4.8")
+    if sys.platform != "win32":
+        ms.version.addpkg("gssapi", "1.6.5")
+        ms.version.addpkg("krb5", "0.2.0")
+        ms.version.addpkg("python-scvlib", "1.0.25", meta="sec")
+        ms.version.addpkg("cffi", "1.14.5")
+        ms.version.addpkg("PyJWT", "1.5.3")
+
+    try:
+        import bbgapi  # noqa: F401
+    except ImportError as exc:
+        raise ImportError(
+            "ms.version.addpkg('bbgapi') ran but import still fails. "
+            "Check BBGAPI_VERSION in curve_config / DataZone access."
+        ) from exc
+
+
 def _bquery():
     global _BQ
     _quiet_bbg_logs()
     if _BQ is not None:
         return _BQ
-    try:
-        from bbgapi.query import BlpQuery
-    except ImportError as exc:
-        raise ImportError(
-            "bbgapi missing. Use DataZone kernel + "
-            "`from bbgapi.query import BlpQuery; BlpQuery().start()`."
-        ) from exc
+    _ensure_bbgapi()
+    from bbgapi.query import BlpQuery
     _BQ = BlpQuery().start()
     _quiet_bbg_logs()
     return _BQ

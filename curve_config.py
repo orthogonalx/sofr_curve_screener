@@ -11,6 +11,7 @@
 # =============================================================================
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
 
 # ── Data paths (DataZone: point these at your uploaded file) ──────────────────
@@ -34,9 +35,12 @@ BBG_FWD_SUFFIX = "BLC Curncy"
 #                      end_datetime="YYYY-MM-DDTHH:MM:SS")
 #   close = bars.set_index("time")["close"]
 BBG_EVENT_TYPE = "TRADE"
-BBG_INTERVAL_MINUTES = 180          # 3h bars (matches sofr_3h / desk extract)
-BBG_START_DATE = "20240101"         # history start (YYYYMMDD or YYYY-MM-DD)
-BBG_END_DATE = ""                   # "" = now
+BBG_INTERVAL_MINUTES = 180          # 3h bars
+MAX_HISTORY_DAYS = 100              # keep ~100 days on disk / in the history pull
+BBG_START_DATE = (datetime.now() - timedelta(days=MAX_HISTORY_DAYS)).strftime("%Y%m%d")
+BBG_END_DATE = ""                   # "" = now (most recent)
+# DataZone: bbgapi is not on sys.path until ms.version.addpkg (same as jumpstart notebook)
+BBGAPI_VERSION = "2022.09.26-2"
 
 
 # ── Forward grid (start years, gap years) → cleaned name "{start}y{gap}y" ─────
@@ -310,7 +314,8 @@ BACKTEST_POSITION_MODE = "one_bar"  # "one_bar" | "hold"
 
 # ── Live store (updated by run_prediction refresh) ────────────────────────────
 LIVE_STORE_PATH = "sofr_live.csv"     # stacked panel on disk
-MAX_HISTORY_BARS = 2000               # trim after each append
+# 100 days × 8 bars/day at 3h ≈ 800; +buffer for weekends/extra prints
+MAX_HISTORY_BARS = MAX_HISTORY_DAYS * (24 * 60 // BBG_INTERVAL_MINUTES) + 50
 
 # Email (override via env: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
 #        REPORT_TO, REPORT_FROM)
