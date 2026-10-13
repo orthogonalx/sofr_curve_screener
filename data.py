@@ -295,38 +295,86 @@ def _try_import_bbgapi():
     return bbgapi
 
 
-def _add_bbgapi_deps(ms_version) -> None:
-    """Deps from bbgapi_jumpstart.bbgapi_dependencies() (+ urllib3 stack)."""
-    for name, ver, kw in (
-        ("urllib3", "1.26.7", {}),
-        ("certifi", "2021.10.8", {}),
-        ("idna", "3.3", {}),
-        ("chardet", "4.0.0", {}),
-        ("charset-normalizer", "2.0.7", {}),
-        ("blpapi", "3.16.5", {"shadow": True}),
-        ("toml", "0.10.1", {}),
-        ("requests", "2.26.0", {"shadow": True}),
-        ("retrying", "1.3.3", {}),
-        ("requests-kerberos", "0.14.0", {}),
-        ("pyspnego", "0.3.1", {}),
-        ("cryptography", "3.4.8", {}),
-    ):
+def _addpkg_versions(ms_version, name: str, versions, kw=None) -> bool:
+    """Try several addpkg versions until import of `name` (or import alias) works."""
+    kw = kw or {}
+    # charset-normalizer imports as charset_normalizer
+    import_name = name.replace("-", "_")
+    try:
+        __import__(import_name)
+        return True
+    except ImportError:
+        pass
+    for ver in versions:
         try:
-            ms_version.addpkg(name, ver, **kw)
-        except Exception as exc:  # noqa: BLE001
-            print(f"  [bbgapi] skip dep {name}: {exc}", flush=True)
-    if sys.platform != "win32":
-        for name, ver, kw in (
-            ("gssapi", "1.6.5", {}),
-            ("krb5", "0.2.0", {}),
-            ("python-scvlib", "1.0.25", {"meta": "sec"}),
-            ("cffi", "1.14.5", {}),
-            ("PyJWT", "1.5.3", {}),
-        ):
             try:
                 ms_version.addpkg(name, ver, **kw)
-            except Exception as exc:  # noqa: BLE001
-                print(f"  [bbgapi] skip dep {name}: {exc}", flush=True)
+            except TypeError:
+                ms_version.addpkg(name, ver)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [bbgapi] skip dep {name} {ver}: {exc}", flush=True)
+            continue
+        try:
+            if import_name in sys.modules:
+                del sys.modules[import_name]
+            __import__(import_name)
+            return True
+        except ImportError:
+            continue
+    # Disk fallback under /ms/dist
+    import glob as _glob
+
+    tag = "python%d.%d" % (sys.version_info[0], sys.version_info[1])
+    for pat in (
+        "/ms/dist/python/PROJ/%s/*/lib/%s/site-packages" % (name, tag),
+        "/ms/dist/python/PROJ/%s/*/exec/lib/%s/site-packages" % (name, tag),
+        "/ms/dist/datazone/PROJ/%s/*/lib/%s/site-packages" % (name, tag),
+    ):
+        for site in sorted(_glob.glob(pat)):
+            if site not in sys.path:
+                sys.path.insert(0, site)
+            try:
+                if import_name in sys.modules:
+                    del sys.modules[import_name]
+                __import__(import_name)
+                print(f"  [bbgapi] {name} from {site}", flush=True)
+                return True
+            except ImportError:
+                continue
+    print(f"  [bbgapi] could not load dep {name}", flush=True)
+    return False
+
+
+def _add_bbgapi_deps(ms_version) -> None:
+    """Deps from bbgapi_jumpstart.bbgapi_dependencies() (+ urllib3 stack)."""
+    _addpkg_versions(
+        ms_version,
+        "urllib3",
+        ("1.26.7", "1.26.6", "1.26.5", "1.26.4", "1.25.11", "1.25.10", "1.24.3", "prod", "latest"),
+    )
+    for name, versions, kw in (
+        ("certifi", ("2021.10.8", "2020.12.5", "prod", "latest"), {}),
+        ("idna", ("3.3", "2.10", "prod", "latest"), {}),
+        ("chardet", ("4.0.0", "3.0.4", "prod", "latest"), {}),
+        ("charset-normalizer", ("2.0.7", "2.0.12", "prod", "latest"), {}),
+        ("blpapi", ("3.16.5", "3.15.2", "prod", "latest"), {"shadow": True}),
+        ("toml", ("0.10.1", "0.10.2", "prod", "latest"), {}),
+        ("requests", ("2.26.0", "2.25.1", "2.22.0", "prod", "latest"), {"shadow": True}),
+        ("retrying", ("1.3.3", "prod", "latest"), {}),
+        ("requests-kerberos", ("0.14.0", "0.12.0", "prod", "latest"), {}),
+        ("pyspnego", ("0.3.1", "0.1.5", "prod", "latest"), {}),
+        ("cryptography", ("3.4.8", "3.3.2", "prod", "latest"), {}),
+    ):
+        _addpkg_versions(ms_version, name, versions, kw)
+    if sys.platform != "win32":
+        for name, versions, kw in (
+            ("gssapi", ("1.6.5", "1.6.1", "prod", "latest"), {}),
+            ("krb5", ("0.2.0", "0.1.2", "prod", "latest"), {}),
+            ("python-scvlib", ("1.0.25", "prod", "latest"), {"meta": "sec"}),
+            ("cffi", ("1.14.5", "1.14.0", "prod", "latest"), {}),
+            ("PyJWT", ("1.5.3", "1.7.1", "prod", "latest"), {}),
+        ):
+            _addpkg_versions(ms_version, name, versions, kw)
 
 
 def _discover_bbgapi_sites() -> List[str]:

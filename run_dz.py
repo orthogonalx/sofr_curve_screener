@@ -65,6 +65,81 @@ def _maybe_reexec_for_bbgapi() -> None:
     os.execv(py, [py, os.path.abspath(__file__)] + sys.argv[1:])
 
 
+def _discover_site(pkg_name):
+    """Find site-packages dirs under /ms/dist that contain pkg_name."""
+    tag = "python%d.%d" % (sys.version_info[0], sys.version_info[1])
+    patterns = [
+        "/ms/dist/python/PROJ/%s/*/lib/%s/site-packages" % (pkg_name, tag),
+        "/ms/dist/python/PROJ/%s/*/exec/lib/%s/site-packages" % (pkg_name, tag),
+        "/ms/dist/python/PROJ/%s/*/%s/site-packages" % (pkg_name, tag),
+        "/ms/dist/datazone/PROJ/%s/*/lib/%s/site-packages" % (pkg_name, tag),
+        "/ms/dist/datazone/PROJ/%s/*/exec/lib/%s/site-packages" % (pkg_name, tag),
+    ]
+    found = []
+    for pat in patterns:
+        for d in sorted(glob.glob(pat)):
+            if os.path.isdir(os.path.join(d, pkg_name)) or os.path.isfile(
+                os.path.join(d, pkg_name + ".py")
+            ):
+                if d not in found:
+                    found.append(d)
+    return found
+
+
+def _ensure_import(ms_version, mod_name, versions, kw=None, required=False):
+    """addpkg + import; try versions then /ms/dist discovery."""
+    kw = kw or {}
+    try:
+        __import__(mod_name)
+        return True
+    except ImportError:
+        pass
+
+    for ver in versions:
+        try:
+            ms_version.addpkg(mod_name, ver, **kw)
+        except TypeError:
+            try:
+                ms_version.addpkg(mod_name, ver)
+            except Exception as exc:  # noqa: BLE001
+                print("  [dz] skip %s %s: %s" % (mod_name, ver, exc), flush=True)
+                continue
+        except Exception as exc:  # noqa: BLE001
+            print("  [dz] skip %s %s: %s" % (mod_name, ver, exc), flush=True)
+            continue
+        try:
+            if mod_name in sys.modules:
+                del sys.modules[mod_name]
+            __import__(mod_name)
+            print("  [dz] %s OK  v=%s" % (mod_name, ver), flush=True)
+            return True
+        except ImportError as exc:
+            print("  [dz] %s addpkg ok but import fail v=%s: %s" % (mod_name, ver, exc), flush=True)
+
+    for site in _discover_site(mod_name):
+        if site not in sys.path:
+            sys.path.insert(0, site)
+        try:
+            if mod_name in sys.modules:
+                del sys.modules[mod_name]
+            mod = __import__(mod_name)
+            print(
+                "  [dz] %s OK from %s  file=%s"
+                % (mod_name, site, getattr(mod, "__file__", "?")),
+                flush=True,
+            )
+            return True
+        except ImportError:
+            continue
+
+    msg = "  [dz] could not import %s (tried %s)" % (mod_name, ", ".join(versions))
+    if required:
+        print("ERROR: " + msg, flush=True)
+        raise SystemExit(2)
+    print(msg, flush=True)
+    return False
+
+
 def _bootstrap() -> None:
     try:
         import ms.version
@@ -77,27 +152,58 @@ def _bootstrap() -> None:
         )
         raise SystemExit(2)
 
-    pkgs = [
-        ("pandas", "1.3.4", {}),
-        ("numpy", "1.21.2", {}),
-        ("pytz", "2022.1", {}),
-        ("dateutil", "2.8.0", {}),
-        ("six", "1.12.0", {}),
-        ("openpyxl", "3.0.9", {}),
-        ("urllib3", "1.26.7", {}),
-        ("certifi", "2021.10.8", {}),
-        ("idna", "3.3", {}),
-        ("chardet", "4.0.0", {}),
-        ("charset-normalizer", "2.0.7", {}),
-        ("requests", "2.26.0", {"shadow": True}),
-        ("toml", "0.10.1", {}),
-        ("retrying", "1.3.3", {}),
-    ]
-    for name, ver, kw in pkgs:
+    # Core scientific stack (best-effort versions)
+    for name, vers in (
+        ("six", ("1.12.0", "1.16.0", "prod", "latest")),
+        ("pytz", ("2022.1", "2021.3", "prod", "latest")),
+        ("dateutil", ("2.8.0", "2.8.2", "prod", "latest")),
+        ("numpy", ("1.21.2", "1.19.5", "1.18.5", "prod", "latest")),
+        ("pandas", ("1.3.4", "1.1.5", "0.25.3", "prod", "latest")),
+        ("openpyxl", ("3.0.9", "3.0.7", "prod", "latest")),
+    ):
+        _ensure_import(ms.version, name, vers)
+
+    # urllib3 stack — bbgapi/requests need this; try many versions + disk
+    _ensure_import(
+        ms.version,
+        "urllib3",
+        ("1.26.7", "1.26.6", "1.26.5", "1.26.4", "1.25.11", "1.25.10", "1.24.3", "prod", "latest"),
+        required=True,
+    )
+    for name, vers, kw in (
+        ("certifi", ("2021.10.8", "2020.12.5", "prod", "latest"), {}),
+        ("idna", ("3.3", "2.10", "prod", "latest"), {}),
+        ("chardet", ("4.0.0", "3.0.4", "prod", "latest"), {}),
+        ("charset_normalizer", ("2.0.7", "2.0.12", "prod", "latest"), {}),
+        ("toml", ("0.10.1", "0.10.2", "prod", "latest"), {}),
+        ("retrying", ("1.3.3", "prod", "latest"), {}),
+        ("requests", ("2.26.0", "2.25.1", "2.22.0", "prod", "latest"), {"shadow": True}),
+    ):
+        # addpkg name uses hyphen for charset-normalizer
+        pkg = "charset-normalizer" if name == "charset_normalizer" else name
         try:
-            ms.version.addpkg(name, ver, **kw)
-        except Exception as exc:  # noqa: BLE001
-            print("  [dz] skip %s: %s" % (name, exc), flush=True)
+            __import__(name)
+            continue
+        except ImportError:
+            pass
+        for ver in vers:
+            try:
+                ms.version.addpkg(pkg, ver, **kw)
+            except TypeError:
+                try:
+                    ms.version.addpkg(pkg, ver)
+                except Exception as exc:  # noqa: BLE001
+                    print("  [dz] skip %s %s: %s" % (pkg, ver, exc), flush=True)
+                    continue
+            except Exception as exc:  # noqa: BLE001
+                print("  [dz] skip %s %s: %s" % (pkg, ver, exc), flush=True)
+                continue
+            try:
+                __import__(name)
+                print("  [dz] %s OK  v=%s" % (pkg, ver), flush=True)
+                break
+            except ImportError:
+                continue
 
     # Pre-load bbgapi here so failures are obvious before prediction starts
     try:
