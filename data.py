@@ -291,20 +291,37 @@ def _try_import_bbgapi():
 
 
 def _add_bbgapi_deps(ms_version) -> None:
-    """Deps from bbgapi_jumpstart.bbgapi_dependencies()."""
-    ms_version.addpkg("blpapi", "3.16.5", shadow=True)
-    ms_version.addpkg("toml", "0.10.1")
-    ms_version.addpkg("requests", "2.26.0", shadow=True)
-    ms_version.addpkg("retrying", "1.3.3")
-    ms_version.addpkg("requests-kerberos", "0.14.0")
-    ms_version.addpkg("pyspnego", "0.3.1")
-    ms_version.addpkg("cryptography", "3.4.8")
+    """Deps from bbgapi_jumpstart.bbgapi_dependencies() (+ urllib3 stack)."""
+    for name, ver, kw in (
+        ("urllib3", "1.26.7", {}),
+        ("certifi", "2021.10.8", {}),
+        ("idna", "3.3", {}),
+        ("chardet", "4.0.0", {}),
+        ("charset-normalizer", "2.0.7", {}),
+        ("blpapi", "3.16.5", {"shadow": True}),
+        ("toml", "0.10.1", {}),
+        ("requests", "2.26.0", {"shadow": True}),
+        ("retrying", "1.3.3", {}),
+        ("requests-kerberos", "0.14.0", {}),
+        ("pyspnego", "0.3.1", {}),
+        ("cryptography", "3.4.8", {}),
+    ):
+        try:
+            ms_version.addpkg(name, ver, **kw)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [bbgapi] skip dep {name}: {exc}", flush=True)
     if sys.platform != "win32":
-        ms_version.addpkg("gssapi", "1.6.5")
-        ms_version.addpkg("krb5", "0.2.0")
-        ms_version.addpkg("python-scvlib", "1.0.25", meta="sec")
-        ms_version.addpkg("cffi", "1.14.5")
-        ms_version.addpkg("PyJWT", "1.5.3")
+        for name, ver, kw in (
+            ("gssapi", "1.6.5", {}),
+            ("krb5", "0.2.0", {}),
+            ("python-scvlib", "1.0.25", {"meta": "sec"}),
+            ("cffi", "1.14.5", {}),
+            ("PyJWT", "1.5.3", {}),
+        ):
+            try:
+                ms_version.addpkg(name, ver, **kw)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [bbgapi] skip dep {name}: {exc}", flush=True)
 
 
 def _ensure_bbgapi() -> None:

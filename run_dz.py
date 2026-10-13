@@ -32,7 +32,7 @@ def _bootstrap() -> None:
         )
         raise SystemExit(2)
 
-    # Enough for the screener + bbgapi jumpstart deps
+    # Enough for the screener + bbgapi / requests stack (jumpstart-ish)
     pkgs = [
         ("pandas", "1.3.4", {}),
         ("numpy", "1.21.2", {}),
@@ -40,6 +40,14 @@ def _bootstrap() -> None:
         ("dateutil", "2.8.0", {}),
         ("six", "1.12.0", {}),
         ("openpyxl", "3.0.9", {}),
+        ("urllib3", "1.26.7", {}),
+        ("certifi", "2021.10.8", {}),
+        ("idna", "3.3", {}),
+        ("chardet", "4.0.0", {}),
+        ("charset-normalizer", "2.0.7", {}),
+        ("requests", "2.26.0", {"shadow": True}),
+        ("toml", "0.10.1", {}),
+        ("retrying", "1.3.3", {}),
     ]
     for name, ver, kw in pkgs:
         try:
