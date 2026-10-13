@@ -10,12 +10,17 @@ from typing import List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+import curve_config as _cfg
 from curve_config import (
     BBG_END_DATE, BBG_EVENT_TYPE, BBG_FWD_PREFIX, BBG_FWD_SUFFIX,
-    BBG_INTERVAL_MINUTES, BBG_PREFIX, BBG_START_DATE, BBG_SUFFIX,
-    BBGAPI_PATH, BBGAPI_VERSION, CURVES, DATA_BAR_MINUTES, DATA_PATH, FLIES,
-    FORWARDS, FWD_CURVES, FWD_FLIES, LIVE_STORE_PATH, MAX_HISTORY_BARS, PREDICTED,
+    BBG_INTERVAL_MINUTES, BBG_PREFIX, BBG_START_DATE, BBG_SUFFIX, CURVES,
+    DATA_BAR_MINUTES, DATA_PATH, FLIES, FORWARDS, FWD_CURVES, FWD_FLIES,
+    LIVE_STORE_PATH, MAX_HISTORY_BARS, PREDICTED,
 )
+
+# Optional knobs (older clones may not define them yet)
+BBGAPI_VERSION = getattr(_cfg, "BBGAPI_VERSION", "2022.09.26-2")
+BBGAPI_PATH = getattr(_cfg, "BBGAPI_PATH", "")
 
 _TENOR_RE = re.compile(rf"^{re.escape(BBG_PREFIX)}(\d+)\s*{re.escape(BBG_SUFFIX)}$", re.I)
 _FWD_RE = re.compile(rf"^{re.escape(BBG_FWD_PREFIX)}\s+(\d+)Y(\d+)Y\s*{re.escape(BBG_FWD_SUFFIX)}$", re.I)
