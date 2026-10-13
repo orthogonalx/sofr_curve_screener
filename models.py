@@ -12,13 +12,16 @@ import logging
 import os
 import smtplib
 from dataclasses import dataclass, field
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 
+import curve_config as _curve_cfg
 from curve_config import (
     ADD_INTERCEPT,
     BACKTEST_END,
@@ -48,6 +51,9 @@ from curve_config import (
     RegressionSpec,
     ZScoreSpec,
 )
+
+EMAIL_ATTACH_CSV = getattr(_curve_cfg, "EMAIL_ATTACH_CSV", True)
+SMTP_USE_TLS = getattr(_curve_cfg, "SMTP_USE_TLS", True)
 from data import resolve_feature_name
 
 log = logging.getLogger(__name__)
@@ -846,6 +852,7 @@ def send_summary_email(
     subject: Optional[str] = None,
     to: Optional[Sequence[str]] = None,
     body: Optional[str] = None,
+    attach_paths: Optional[Sequence[str]] = None,
 ) -> bool:
     """
     Send summary. Returns True if sent, False if skipped (disabled / incomplete).
@@ -862,26 +869,62 @@ def send_summary_email(
     env_to = _cfg("REPORT_TO")
     if env_to:
         mail_to = [x.strip() for x in env_to.split(",") if x.strip()]
+    use_tls = os.environ.get("SMTP_USE_TLS", str(SMTP_USE_TLS)).lower() in {
+        "1", "true", "yes",
+    }
 
     text = body if body is not None else format_summary_text(summary, asof=asof)
     if not enabled or not host or not mail_to or not mail_from:
         if body is None:
             print(text, flush=True)
+        missing = []
+        if not enabled:
+            missing.append("EMAIL_ENABLED")
+        if not host:
+            missing.append("SMTP_HOST")
+        if not mail_to:
+            missing.append("REPORT_TO")
+        if not mail_from:
+            missing.append("REPORT_FROM/SMTP_USER")
         print(
-            "[email skipped] set EMAIL_ENABLED=true and SMTP_HOST / REPORT_TO "
-            "(and credentials) to send",
+            "[email skipped] fill %s in curve_config.py (or env), then re-run"
+            % ", ".join(missing),
             flush=True,
         )
         return False
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject or f"SOFR screener {asof or ''}".strip()
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = subject or f"SOFR prediction {asof or ''}".strip()
     msg["From"] = mail_from
     msg["To"] = ", ".join(mail_to)
     msg.attach(MIMEText(text, "plain", "utf-8"))
-    with smtplib.SMTP(host, port, timeout=30) as smtp:
-        smtp.starttls()
-        if user:
-            smtp.login(user, password)
-        smtp.sendmail(mail_from, mail_to, msg.as_string())
-    return True
+
+    paths = list(attach_paths or [])
+    if not paths and EMAIL_ATTACH_CSV:
+        default_csv = Path("predictions_latest.csv")
+        if default_csv.exists():
+            paths = [str(default_csv)]
+    for p in paths:
+        fp = Path(p)
+        if not fp.exists():
+            print("[email] missing attach %s" % fp, flush=True)
+            continue
+        part = MIMEApplication(fp.read_bytes(), Name=fp.name)
+        part["Content-Disposition"] = 'attachment; filename="%s"' % fp.name
+        msg.attach(part)
+
+    try:
+        with smtplib.SMTP(host, port, timeout=30) as smtp:
+            if use_tls:
+                smtp.starttls()
+            if user:
+                smtp.login(user, password)
+            smtp.sendmail(mail_from, mail_to, msg.as_string())
+        print(
+            "[email sent] to=%s  subject=%r" % (", ".join(mail_to), msg["Subject"]),
+            flush=True,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print("[email FAILED] %s" % exc, flush=True)
+        return False
