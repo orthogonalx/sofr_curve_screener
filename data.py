@@ -503,13 +503,29 @@ def _ensure_bbgapi() -> None:
 
 
 def _bquery():
+    """Return a started BlpQuery. start() often returns None (mutates in place)."""
     global _BQ
     _quiet_bbg_logs()
-    if _BQ is not None:
+    if _BQ is not None and hasattr(_BQ, "bdib"):
         return _BQ
     _ensure_bbgapi()
     from bbgapi.query import BlpQuery
-    _BQ = BlpQuery().start()
+
+    bq = BlpQuery()
+    started = bq.start()
+    # Desk jumpstart: BlpQuery().start() → self; some builds return None
+    client = started if started is not None else bq
+    if client is None or not hasattr(client, "bdib"):
+        raise RuntimeError(
+            "BlpQuery().start() did not yield a client with .bdib "
+            "(got %r). Check bbgapi version / session." % (started,)
+        )
+    _BQ = client
+    print(
+        "  [bbgapi] BlpQuery ready  type=%s  file=%s"
+        % (type(_BQ).__name__, getattr(sys.modules.get("bbgapi"), "__file__", "?")),
+        flush=True,
+    )
     _quiet_bbg_logs()
     return _BQ
 
