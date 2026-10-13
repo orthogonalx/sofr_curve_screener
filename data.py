@@ -248,23 +248,28 @@ _BBG_LOG_NAMES = (
 
 
 def _quiet_bbg_logs() -> None:
-    """Silence INFO spam from bbgapi (shows as red/pink blocks in Jupyter)."""
-    logging.basicConfig(level=logging.ERROR)
+    """Silence bbgapi/dz INFO (pink/red blocks in Jupyter)."""
+    # Hard stop: drop everything below ERROR process-wide
+    logging.disable(logging.WARNING)
     root = logging.getLogger()
     root.setLevel(logging.ERROR)
     for h in list(root.handlers):
         h.setLevel(logging.ERROR)
-    names = set(_BBG_LOG_NAMES) | set(logging.root.manager.loggerDict)
-    for name in names:
+    for name in set(_BBG_LOG_NAMES) | set(logging.root.manager.loggerDict):
         low = str(name).lower()
         if name in _BBG_LOG_NAMES or any(
-            k in low for k in ("bbg", "blp", "dz", "datazone", "activity", "kerberos")
+            k in low for k in ("bbg", "blp", "dz", "datazone", "activity", "kerberos", "ms.")
         ):
             lg = logging.getLogger(name)
-            lg.setLevel(logging.ERROR)
+            lg.handlers = []
+            lg.setLevel(logging.CRITICAL)
             lg.propagate = False
-            for h in list(lg.handlers):
-                h.setLevel(logging.ERROR)
+            lg.disabled = True
+    try:
+        import warnings
+        warnings.filterwarnings("ignore")
+    except Exception:
+        pass
 
 
 def _securities() -> List[str]:
@@ -277,9 +282,9 @@ def _securities() -> List[str]:
 
 def _bquery():
     global _BQ
+    _quiet_bbg_logs()
     if _BQ is not None:
         return _BQ
-    _quiet_bbg_logs()
     try:
         from bbgapi.query import BlpQuery
     except ImportError as exc:
@@ -288,7 +293,7 @@ def _bquery():
             "`from bbgapi.query import BlpQuery; BlpQuery().start()`."
         ) from exc
     _BQ = BlpQuery().start()
-    _quiet_bbg_logs()  # again after start() (handlers may reappear)
+    _quiet_bbg_logs()
     return _BQ
 
 
@@ -320,6 +325,7 @@ def _interval_minutes(freq=None) -> int:
 def _bdib_close(bq, security: str, start: pd.Timestamp, end: pd.Timestamp,
                 interval: int) -> Optional[pd.Series]:
     """One ticker → close series indexed by time (desk extract)."""
+    _quiet_bbg_logs()
     bars = bq.bdib(
         security=security,
         event_type=BBG_EVENT_TYPE,
