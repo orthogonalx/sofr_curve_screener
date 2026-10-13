@@ -648,6 +648,37 @@ def pull_history_into_store(path: Optional[str] = None, start_date=None, end_dat
     return hist
 
 
+def print_live_levels(data_raw: pd.DataFrame, src: str = "") -> None:
+    """Print last-bar outright/forward levels so a live pull is obvious."""
+    if data_raw is None or data_raw.empty:
+        print("  [levels] empty panel", flush=True)
+        return
+    cleaned = clean_raw_columns(data_raw)
+    last = cleaned.iloc[-1]
+    asof = cleaned.index[-1]
+    # Prefer clean tenors (2,5,10,…) then a few forwards
+    tenor_cols = [c for c in cleaned.columns if str(c).isdigit()]
+    tenor_cols = sorted(tenor_cols, key=lambda x: int(x))
+    fwd_cols = [c for c in cleaned.columns if _FWD_CLEAN_RE.match(str(c))]
+    # show all tenors + a short fwd sample (first 8)
+    show_cols = tenor_cols + fwd_cols[:8]
+    if not show_cols:
+        show_cols = list(cleaned.columns[:12])
+    parts = []
+    for c in show_cols:
+        v = last[c]
+        if pd.isna(v):
+            parts.append("%s=nan" % c)
+        else:
+            parts.append("%s=%.4f" % (c, float(v)))
+    tag = (" src=%s" % src) if src else ""
+    print(
+        "  [levels] asof=%s  n=%d%s\n           %s"
+        % (asof, len(cleaned), tag, "  ".join(parts)),
+        flush=True,
+    )
+
+
 def append_live_bar(max_bars: int = MAX_HISTORY_BARS) -> pd.DataFrame:
     """Pull latest bdib bar and append onto the live store."""
     panel = append_snapshot(_fetch_latest(), path=LIVE_STORE_PATH, max_bars=max_bars)

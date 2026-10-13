@@ -16,7 +16,7 @@ from curve_config import (
     REFRESH_DATA_ON_REQUEST,
     TRAIN_SIZE,
 )
-from data import build_panel, load_panel, refresh_live_store
+from data import build_panel, load_panel, print_live_levels, refresh_live_store
 from models import append_zscore_latest, run_chosen_predictions, send_summary_email
 
 # Last-run metadata (avoid DataFrame.attrs — missing on pandas 0.25 / DataZone)
@@ -31,6 +31,7 @@ def run_once(*, refresh: bool = True, force_history: bool = False) -> pd.DataFra
         data_raw, src = refresh_live_store(force_history=force_history)
     else:
         data_raw, src = load_panel()
+    print_live_levels(data_raw, src=src)
     _, full, pred = build_panel(data_raw)
     asof = str(data_raw.index[-1])
     print(
