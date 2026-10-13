@@ -323,11 +323,15 @@ LIVE_STORE_PATH = "sofr_live.csv"     # stacked panel on disk
 MAX_HISTORY_BARS = MAX_HISTORY_DAYS * (24 * 60 // BBG_INTERVAL_MINUTES) + 50
 
 # Email (override via env: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
-#        REPORT_TO, REPORT_FROM)
-SMTP_HOST = ""
+#        REPORT_TO, REPORT_FROM, EMAIL_ENABLED, SMTP_USE_TLS)
+# Fill REPORT_TO + SMTP_HOST, then set EMAIL_ENABLED = True.
+SMTP_HOST = ""                        # e.g. internal relay host
 SMTP_PORT = 587
 SMTP_USER = ""
 SMTP_PASSWORD = ""
-REPORT_FROM = ""
-REPORT_TO: List[str] = []             # e.g. ["desk@firm.com"]
+SMTP_USE_TLS = True                   # False for some internal open relays
+REPORT_FROM = ""                      # defaults to SMTP_USER if empty
+REPORT_TO: List[str] = []             # e.g. ["you@firm.com", "desk@firm.com"]
 EMAIL_ENABLED = False                 # set True once SMTP + REPORT_TO are filled
+EMAIL_ATTACH_CSV = True               # attach predictions_latest.csv
+SEND_EMAIL_ON_PREDICTION = True       # run_once / notebook send after each run

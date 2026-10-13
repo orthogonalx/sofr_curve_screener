@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import time
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
+import curve_config as _curve_cfg
 from curve_config import (
     CHOSEN_MODELS,
     DATA_BAR_MINUTES,
@@ -29,8 +31,15 @@ from models import (
 LAST_ASOF = ""
 LAST_TEXT = ""
 
+SEND_EMAIL_ON_PREDICTION = getattr(_curve_cfg, "SEND_EMAIL_ON_PREDICTION", True)
 
-def run_once(*, refresh: bool = True, force_history: bool = False) -> pd.DataFrame:
+
+def run_once(
+    *,
+    refresh: bool = True,
+    force_history: bool = False,
+    send_email: Optional[bool] = None,
+) -> pd.DataFrame:
     global LAST_ASOF, LAST_TEXT
 
     if refresh or force_history:
@@ -58,9 +67,20 @@ def run_once(*, refresh: bool = True, force_history: bool = False) -> pd.DataFra
         f"next ~{DATA_BAR_MINUTES}m\n\n{show.to_string(index=False)}\n"
     )
     print(text, flush=True)
-    Path("predictions_latest.csv").write_text(table.to_csv(index=False))
+    csv_path = Path("predictions_latest.csv")
+    csv_path.write_text(table.to_csv(index=False))
     LAST_ASOF = asof
     LAST_TEXT = text
+
+    do_email = SEND_EMAIL_ON_PREDICTION if send_email is None else bool(send_email)
+    if do_email:
+        send_summary_email(
+            table,
+            asof=asof,
+            subject="SOFR prediction %s" % asof,
+            body=text,
+            attach_paths=[str(csv_path)] if csv_path.exists() else None,
+        )
     return table
 
 
@@ -69,16 +89,15 @@ def main() -> None:
     p.add_argument("--once", action="store_true")
     p.add_argument("--no-refresh", action="store_true")
     p.add_argument("--pull-history", action="store_true")
+    p.add_argument("--no-email", action="store_true", help="Skip email even if EMAIL_ENABLED")
     args = p.parse_args()
     refresh = REFRESH_DATA_ON_REQUEST and not args.no_refresh
 
     def _tick() -> None:
-        t = run_once(refresh=refresh, force_history=args.pull_history)
-        send_summary_email(
-            t,
-            asof=LAST_ASOF,
-            subject="SOFR prediction %s" % LAST_ASOF,
-            body=LAST_TEXT,
+        run_once(
+            refresh=refresh,
+            force_history=args.pull_history,
+            send_email=False if args.no_email else None,
         )
 
     if args.once:
