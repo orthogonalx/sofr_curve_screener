@@ -329,14 +329,36 @@ def _add_bbgapi_deps(ms_version) -> None:
                 print(f"  [bbgapi] skip dep {name}: {exc}", flush=True)
 
 
+def _discover_bbgapi_sites() -> List[str]:
+    """Find bbgapi site-packages dirs under /ms/dist for this Python version."""
+    import glob as _glob
+
+    tag = "python%d.%d" % (sys.version_info[0], sys.version_info[1])
+    patterns = [
+        "/ms/dist/datazone/PROJ/bbgapi/*/lib/%s/site-packages" % tag,
+        "/ms/dist/datazone/PROJ/bbgapi/*/exec/lib/%s/site-packages" % tag,
+        "/ms/dist/datazone/PROJ/bbgapi/*/%s/site-packages" % tag,
+        "/ms/dist/python/PROJ/bbgapi/*/lib/%s/site-packages" % tag,
+        "/ms/dist/python/PROJ/bbgapi/*/exec/lib/%s/site-packages" % tag,
+    ]
+    found: List[str] = []
+    for pat in patterns:
+        for d in sorted(_glob.glob(pat)):
+            pkg = Path(d) / "bbgapi"
+            if (pkg.is_dir() or Path(d, "bbgapi.py").is_file()) and d not in found:
+                found.append(d)
+    return found
+
+
 def _ensure_bbgapi() -> None:
     """
     Load bbgapi for terminal/notebook on DataZone.
 
     Order:
       1) already importable
-      2) optional BBGAPI_PATH on sys.path
-      3) ms.version.addpkg (try several versions) + jumpstart deps
+      2) optional BBGAPI_PATH
+      3) filesystem discovery under /ms/dist/.../bbgapi (matching py version)
+      4) ms.version.addpkg (several versions) + jumpstart deps
     """
     try:
         _try_import_bbgapi()
@@ -350,25 +372,36 @@ def _ensure_bbgapi() -> None:
         p = Path(path)
         if p.is_file():
             p = p.parent
+        # if user pasted .../bbgapi/__init__.py or .../bbgapi, go to site-packages
+        if p.name == "bbgapi":
+            p = p.parent
         if str(p) not in sys.path:
             sys.path.insert(0, str(p))
         try:
             _try_import_bbgapi()
-            print(f"  [bbgapi] loaded from BBGAPI_PATH={p}", flush=True)
+            print("  [bbgapi] loaded from BBGAPI_PATH=%s" % p, flush=True)
             return
         except ImportError:
             pass
+
+    # Auto-discover matching this interpreter (3.10 won't see py3.7 wheels)
+    for site in _discover_bbgapi_sites():
+        if site not in sys.path:
+            sys.path.insert(0, site)
+        try:
+            _try_import_bbgapi()
+            print("  [bbgapi] loaded from %s" % site, flush=True)
+            return
+        except ImportError:
+            continue
 
     try:
         import ms.version
     except ImportError as exc:
         raise ImportError(
             "bbgapi not installed and ms.version unavailable.\n"
-            "In a working notebook run:\n"
-            "  import sys, bbgapi\n"
-            "  print(sys.executable)\n"
-            "  print(bbgapi.__file__)\n"
-            "Use that python in terminal, or set curve_config.BBGAPI_PATH."
+            "Use:  python run_dz.py prediction --once --pull-history\n"
+            "(it re-execs under Python 3.7). Or set curve_config.BBGAPI_PATH."
         ) from exc
 
     last_err: Optional[BaseException] = None
@@ -379,23 +412,30 @@ def _ensure_bbgapi() -> None:
 
     for ver in versions:
         try:
-            print(f"  [bbgapi] ms.version.addpkg  v={ver!r}", flush=True)
+            print("  [bbgapi] ms.version.addpkg  v=%r  py=%s.%s" % (
+                ver, sys.version_info[0], sys.version_info[1]
+            ), flush=True)
             _add_bbgapi_deps(ms.version)
-            ms.version.addpkg("bbgapi", ver, meta="datazone")
+            try:
+                ms.version.addpkg("bbgapi", ver, meta="datazone")
+            except TypeError:
+                ms.version.addpkg("bbgapi", ver)
             _try_import_bbgapi()
-            print(f"  [bbgapi] import OK  v={ver!r}", flush=True)
+            print("  [bbgapi] import OK  v=%r" % (ver,), flush=True)
             return
         except Exception as exc:  # noqa: BLE001
             last_err = exc
-            print(f"  [bbgapi] failed v={ver!r}: {exc}", flush=True)
+            print("  [bbgapi] failed v=%r: %s" % (ver, exc), flush=True)
 
     raise ImportError(
-        "Could not import bbgapi after ms.version.addpkg.\n"
-        "Fix (notebook that already works):\n"
-        "  import sys, bbgapi\n"
-        "  print(sys.executable)      # use THIS python in terminal\n"
-        "  print(bbgapi.__file__)     # parent dir → curve_config.BBGAPI_PATH\n"
-        f"Last error: {last_err!r}"
+        "Could not import bbgapi.\n"
+        "You are on Python %s.%s — desk bbgapi is usually Python 3.7 only.\n"
+        "Run:\n"
+        "  python run_dz.py prediction --once --pull-history\n"
+        "Or in a working notebook:\n"
+        "  import sys, bbgapi; print(sys.executable); print(bbgapi.__file__)\n"
+        "Then set curve_config.BBGAPI_PATH to that site-packages dir.\n"
+        "Last error: %r" % (sys.version_info[0], sys.version_info[1], last_err)
     ) from last_err
 
 
