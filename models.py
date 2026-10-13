@@ -28,6 +28,7 @@ from curve_config import (
     BACKTEST_Z_LOOKBACK,
     BACKTEST_ZSCORE_THR,
     CHOSEN_MODELS,
+    DATA_BAR_MINUTES,
     EMAIL_ENABLED,
     MIN_TRAIN_OBS,
     REGRESSION_SCREENS,
@@ -52,6 +53,52 @@ from data import resolve_feature_name
 log = logging.getLogger(__name__)
 
 COL_RZ = "residual/zscore"
+
+# Prediction table column order (printed / CSV)
+PREDICTION_COLS = [
+    "model",
+    "structure",
+    "features",
+    "predicted_level",
+    "time",
+    "y_pred_prev",
+    "y_realized_prev",
+    "residual_prev",
+    "equation",
+    "n_lookback",
+]
+
+
+def _round3(x) -> float:
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return float("nan")
+    if np.isnan(v):
+        return v
+    return round(v, 3)
+
+
+def format_prediction_table(table: pd.DataFrame) -> pd.DataFrame:
+    """Round numeric cols to 3dp and keep PREDICTION_COLS order (+ any extras)."""
+    if table is None or table.empty:
+        return table
+    out = table.copy()
+    for c in (
+        "predicted_level",
+        "y_pred_prev",
+        "y_realized_prev",
+        "residual_prev",
+        "intercept",
+    ):
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce").round(3)
+    for c in out.columns:
+        if str(c).startswith("beta_"):
+            out[c] = pd.to_numeric(out[c], errors="coerce").round(3)
+    ordered = [c for c in PREDICTION_COLS if c in out.columns]
+    rest = [c for c in out.columns if c not in ordered]
+    return out[ordered + rest]
 
 
 # ── OLS helpers (numpy only) ──────────────────────────────────────────────────
@@ -92,9 +139,9 @@ def equation_from_beta(
 ) -> str:
     """Format y = a + b1*x1 + … from a beta vector (beta[0] = intercept if used)."""
     coefs = beta[1:] if add_intercept else beta
-    pieces = ["%.4f" % (float(beta[0]) if add_intercept else 0.0)]
+    pieces = ["%.3f" % (float(beta[0]) if add_intercept else 0.0)]
     for f, b in zip(features, coefs):
-        pieces.append("%s %.4f*%s" % ("+" if b >= 0 else "-", abs(float(b)), f))
+        pieces.append("%s %.3f*%s" % ("+" if b >= 0 else "-", abs(float(b)), f))
     return f"{target} = " + " ".join(pieces)
 
 
@@ -387,8 +434,8 @@ def fit_predict_next(
 ) -> dict:
     """
     One-shot prediction for a locked model.
-    - y_hat_now:  train iloc[n-k-1 : n-1], predict last bar (realized OOS)
-    - y_hat_next: train iloc[n-k : n], forecast with X of last bar (next bar)
+    - y_pred_prev / y_realized_prev / residual_prev: OOS on last observed bar
+    - predicted_level / time: next-bar forecast (time = last + DATA_BAR_MINUTES)
     """
     spec = _resolved(spec)
     X_all, y_all = _aligned_xy(full_data, predicted_data, spec)
@@ -398,24 +445,29 @@ def fit_predict_next(
 
     X, y = X_all.to_numpy(float), y_all.to_numpy(float)
     x_last = X[n - 1 : n]
+    t_prev = y_all.index[n - 1]
+    t_next = pd.Timestamp(t_prev) + pd.Timedelta(minutes=int(DATA_BAR_MINUTES))
     beta_now = _fit(X[n - k - 1 : n - 1], y[n - k - 1 : n - 1], add_intercept)
     beta_next = _fit(X[n - k : n], y[n - k : n], add_intercept)
-    y_hat_now = float(_predict(x_last, beta_now, add_intercept)[0])
+    y_pred_prev = _round3(_predict(x_last, beta_now, add_intercept)[0])
+    y_realized_prev = _round3(y[n - 1])
     row = {
         "model": spec.name,
         "structure": spec.target,
         "features": "+".join(spec.features),
-        "k": k,
-        "time": y_all.index[n - 1],
-        "nivel": float(y[n - 1]),
-        "y_hat_now": y_hat_now,
-        "residual": float(y[n - 1]) - y_hat_now,
-        "y_hat_next": float(_predict(x_last, beta_next, add_intercept)[0]),
+        "predicted_level": _round3(_predict(x_last, beta_next, add_intercept)[0]),
+        "time": t_next,
+        "y_pred_prev": y_pred_prev,
+        "y_realized_prev": y_realized_prev,
+        "residual_prev": _round3(y_realized_prev - y_pred_prev),
+        "equation": equation_from_beta(spec.target, spec.features, beta_now, add_intercept),
+        "n_lookback": k,
         "train_start": y_all.index[n - k - 1],
         "train_end": y_all.index[n - 2],
-        "equation": equation_from_beta(spec.target, spec.features, beta_now, add_intercept),
+        "asof_prev": t_prev,
     }
-    row.update(_coef_dict(spec.features, beta_now, add_intercept))
+    coefs = _coef_dict(spec.features, beta_now, add_intercept)
+    row.update({kk: _round3(vv) for kk, vv in coefs.items()})
     return row
 
 
@@ -675,15 +727,16 @@ def run_chosen_predictions(
     specs: Sequence[RegressionSpec] = CHOSEN_MODELS,
     train_size: int = TRAIN_SIZE,
 ) -> pd.DataFrame:
-    """Locked-model next-bar table: model, structure, features, k, time, nivel,
-    y_hat_now, residual, y_hat_next, equation, intercept, beta_*."""
-    return pd.DataFrame(
-        [fit_predict_next(full_data, predicted_data, s, train_size=train_size) for s in specs]
+    """Locked-model prediction table (see PREDICTION_COLS)."""
+    return format_prediction_table(
+        pd.DataFrame(
+            [fit_predict_next(full_data, predicted_data, s, train_size=train_size) for s in specs]
+        )
     )
 
 
 def append_zscore_latest(table: pd.DataFrame, full_data: pd.DataFrame) -> pd.DataFrame:
-    """Append latest z-score rows (nivel + z_*) to a prediction table."""
+    """Append latest z-score rows to a prediction table (same column schema)."""
     z_cols = [f"z_{w}" for w in ZSCORE_LOOKBACKS]
     nan = float("nan")
     extra: List[dict] = []
@@ -692,25 +745,28 @@ def append_zscore_latest(table: pd.DataFrame, full_data: pd.DataFrame) -> pd.Dat
         if panel.empty:
             continue
         last = panel.iloc[-1]
+        t_prev = panel.index[-1]
+        t_next = pd.Timestamp(t_prev) + pd.Timedelta(minutes=int(DATA_BAR_MINUTES))
         row = {
             "model": res.spec.param,
             "structure": res.spec.series,
             "features": "",
-            "k": "",
-            "time": panel.index[-1],
-            "nivel": float(last["value"]),
-            "y_hat_now": nan,
-            "residual": float(last["z_50"]) if "z_50" in last.index else nan,
-            "y_hat_next": nan,
+            "predicted_level": nan,
+            "time": t_next,
+            "y_pred_prev": nan,
+            "y_realized_prev": _round3(last["value"]),
+            "residual_prev": _round3(last["z_50"]) if "z_50" in last.index else nan,
             "equation": "",
+            "n_lookback": "",
+            "asof_prev": t_prev,
         }
         for c in z_cols:
             if c in last.index:
-                row[c] = float(last[c]) if pd.notna(last[c]) else nan
+                row[c] = _round3(last[c]) if pd.notna(last[c]) else nan
         extra.append(row)
     if not extra:
-        return table
-    return pd.concat([table, pd.DataFrame(extra)], ignore_index=True)
+        return format_prediction_table(table)
+    return format_prediction_table(pd.concat([table, pd.DataFrame(extra)], ignore_index=True))
 
 
 # ── Latest-observation summary + email ────────────────────────────────────────

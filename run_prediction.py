@@ -17,7 +17,13 @@ from curve_config import (
     TRAIN_SIZE,
 )
 from data import build_panel, load_panel, print_live_levels, refresh_live_store
-from models import append_zscore_latest, run_chosen_predictions, send_summary_email
+from models import (
+    PREDICTION_COLS,
+    append_zscore_latest,
+    format_prediction_table,
+    run_chosen_predictions,
+    send_summary_email,
+)
 
 # Last-run metadata (avoid DataFrame.attrs — missing on pandas 0.25 / DataZone)
 LAST_ASOF = ""
@@ -39,32 +45,17 @@ def run_once(*, refresh: bool = True, force_history: bool = False) -> pd.DataFra
         f"models={[m.name for m in CHOSEN_MODELS]}",
         flush=True,
     )
-    table = append_zscore_latest(
-        run_chosen_predictions(full, pred, specs=CHOSEN_MODELS, train_size=TRAIN_SIZE),
-        full,
-    )
-    show = table.copy()
-    for c in ("nivel", "y_hat_now", "residual", "y_hat_next"):
-        if c in show.columns:
-            show[c] = pd.to_numeric(show[c], errors="coerce").round(4)
-    cols = [
-        c
-        for c in (
-            "model",
-            "structure",
-            "features",
-            "nivel",
-            "y_hat_now",
-            "residual",
-            "y_hat_next",
-            "equation",
-            "time",
+    table = format_prediction_table(
+        append_zscore_latest(
+            run_chosen_predictions(full, pred, specs=CHOSEN_MODELS, train_size=TRAIN_SIZE),
+            full,
         )
-        if c in show.columns
-    ]
+    )
+    cols = [c for c in PREDICTION_COLS if c in table.columns]
+    show = table[cols]
     text = (
         f"SOFR prediction  |  asof {asof}  |  k={TRAIN_SIZE}  |  "
-        f"next ~{DATA_BAR_MINUTES}m\n\n{show[cols].to_string(index=False)}\n"
+        f"next ~{DATA_BAR_MINUTES}m\n\n{show.to_string(index=False)}\n"
     )
     print(text, flush=True)
     Path("predictions_latest.csv").write_text(table.to_csv(index=False))
