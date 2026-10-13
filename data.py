@@ -103,12 +103,19 @@ def append_snapshot(snapshot: pd.DataFrame, path=LIVE_STORE_PATH,
     snap.index.name = "time"
     snap = snap.apply(pd.to_numeric, errors="coerce")
 
-    existing = load_live_store(path)
+    # Load without ffill so we don't bake forward-filled values into disk twice
+    path = Path(path)
+    if path.exists():
+        existing = load_raw(path, ffill=False)
+    else:
+        existing = pd.DataFrame()
     if existing.empty:
         combined = snap
     else:
         combined = pd.concat([existing, snap], axis=0)
         combined = combined[~combined.index.duplicated(keep="last")].sort_index()
+    # Partial BBG bars (e.g. forwards OK, USOSFR empty) → carry last known level
+    combined = combined.apply(pd.to_numeric, errors="coerce").ffill()
     if max_bars is not None and len(combined) > max_bars:
         combined = combined.iloc[-max_bars:]
     save_live_store(combined, path)
