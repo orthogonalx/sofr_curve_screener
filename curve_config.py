@@ -296,8 +296,17 @@ ADD_INTERCEPT = True
 MIN_TRAIN_OBS = 30                  # skip fit if too few clean rows after NaN drop
 
 DATA_BAR_MINUTES = BBG_INTERVAL_MINUTES  # next-bar horizon (= bdib interval)
-PREDICTION_EMAIL_EVERY_HOURS = 3    # loop / email cadence for run_prediction
+# How often the prediction loop runs (and emails). Independent of BBG bar size.
+PREDICTION_EVERY_MINUTES = 30       # e.g. 30 = every half hour
+PREDICTION_EMAIL_EVERY_HOURS = PREDICTION_EVERY_MINUTES / 60.0  # legacy alias
 REFRESH_DATA_ON_REQUEST = True      # BBG refresh before each prediction
+
+# Evolution charts for email / notebook (calendar days, not # of bars)
+GRAPH_LOOKBACK_DAYS = 9             # plot last N calendar days of structures
+GRAPH_ROOT = "graphs"               # parent folder for PNGs
+GRAPH_DIR_EVOLUTION = "graphs/evolution"
+GRAPH_DIR_BACKTEST_PNL = "graphs/backtest_pnl"
+GRAPH_DIR_BACKTEST_VARS = "graphs/backtest_vars"
 BACKTEST_START = "2024-01-01"       # inclusive
 BACKTEST_END = None                 # None = through last available bar
 
@@ -334,4 +343,5 @@ REPORT_FROM = ""                      # defaults to SMTP_USER if empty
 REPORT_TO: List[str] = []             # e.g. ["you@firm.com", "desk@firm.com"]
 EMAIL_ENABLED = False                 # set True once SMTP + REPORT_TO are filled
 EMAIL_ATTACH_CSV = True               # attach predictions_latest.csv
+EMAIL_ATTACH_GRAPHS = True            # attach evolution PNGs
 SEND_EMAIL_ON_PREDICTION = True       # run_once / notebook send after each run
