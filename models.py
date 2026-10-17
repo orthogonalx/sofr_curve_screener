@@ -26,7 +26,12 @@ from curve_config import (
 from data import resolve_feature_name
 
 EMAIL_ATTACH_CSV = getattr(_curve_cfg, "EMAIL_ATTACH_CSV", True)
+EMAIL_ATTACH_GRAPHS = getattr(_curve_cfg, "EMAIL_ATTACH_GRAPHS", True)
 SMTP_USE_TLS = getattr(_curve_cfg, "SMTP_USE_TLS", True)
+GRAPH_LOOKBACK_DAYS = getattr(_curve_cfg, "GRAPH_LOOKBACK_DAYS", 9)
+GRAPH_DIR_EVOLUTION = getattr(_curve_cfg, "GRAPH_DIR_EVOLUTION", "graphs/evolution")
+GRAPH_DIR_BACKTEST_PNL = getattr(_curve_cfg, "GRAPH_DIR_BACKTEST_PNL", "graphs/backtest_pnl")
+GRAPH_DIR_BACKTEST_VARS = getattr(_curve_cfg, "GRAPH_DIR_BACKTEST_VARS", "graphs/backtest_vars")
 log = logging.getLogger(__name__)
 COL_RZ = "residual/zscore"
 PREDICTION_COLS = [
@@ -458,15 +463,100 @@ def summary_table(results):
     return pd.DataFrame([r.summary for r in results.values()])[_SUMMARY_COLS] if results else pd.DataFrame()
 
 
-def save_backtest_plots(result):
-    name, spec, path = result.spec.name, result.spec, result.path
+def _plt():
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        return plt
     except ImportError:
+        return None
+
+
+def _ensure_dir(path):
+    p = Path(path)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _slice_last_days(df, days):
+    """Keep rows in the last `days` calendar days (inclusive of last timestamp)."""
+    if df is None or df.empty:
+        return df
+    end = pd.Timestamp(df.index[-1])
+    start = end - pd.Timedelta(days=float(days))
+    return df.loc[df.index >= start]
+
+
+def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
+    """
+    Plot CHOSEN structure levels over the last N calendar days.
+    Writes graphs/evolution/evolution_structures.png (+ one PNG per model).
+    """
+    days = GRAPH_LOOKBACK_DAYS if days is None else int(days)
+    specs = list(specs or CHOSEN_MODELS)
+    out_dir = _ensure_dir(out_dir or GRAPH_DIR_EVOLUTION)
+    plt = _plt()
+    if plt is None:
+        print("  skip evolution plots: matplotlib not installed", flush=True)
+        return []
+    panel = _slice_last_days(full_data, days)
+    if panel is None or panel.empty:
+        print("  skip evolution plots: empty panel", flush=True)
+        return []
+    written = []
+    targets = []
+    for spec in specs:
+        t = getattr(spec, "target", None)
+        if t and t in panel.columns and t not in targets:
+            targets.append(t)
+    if not targets:
+        print("  skip evolution plots: no target columns in full_data", flush=True)
+        return []
+
+    # Combined chart
+    fig, ax = plt.subplots(figsize=(12, 4.5))
+    for t in targets:
+        ax.plot(panel.index, panel[t], lw=1.1, label=t)
+    ax.set_title("Structure levels — last %d calendar days" % days)
+    ax.set_ylabel("bp"); ax.set_xlabel("time")
+    ax.grid(True, alpha=0.3); ax.legend(loc="best", fontsize=8, ncol=2)
+    fig.tight_layout()
+    outfile = str(out_dir / "evolution_structures.png")
+    fig.savefig(outfile, dpi=120); plt.close(fig)
+    written.append(outfile)
+
+    # One chart per model: y + features
+    for spec in specs:
+        cols = [spec.target] + [f for f in spec.features if f in panel.columns]
+        cols = [c for c in cols if c in panel.columns]
+        if not cols:
+            continue
+        fig, ax = plt.subplots(figsize=(12, 3.8))
+        for c in cols:
+            ax.plot(panel.index, panel[c], lw=1.0, label=c)
+        ax.set_title("%s — last %d days  (%s ~ %s)" % (
+            spec.name, days, spec.target, "+".join(spec.features)))
+        ax.set_ylabel("bp"); ax.set_xlabel("time")
+        ax.grid(True, alpha=0.3); ax.legend(loc="best", fontsize=8)
+        fig.tight_layout()
+        outfile = str(out_dir / ("evolution_%s.png" % spec.name))
+        fig.savefig(outfile, dpi=120); plt.close(fig)
+        written.append(outfile)
+
+    print("  [graphs] evolution → %s  (%d files, %d days)" % (out_dir, len(written), days),
+          flush=True)
+    return written
+
+
+def save_backtest_plots(result):
+    name, spec, path = result.spec.name, result.spec, result.path
+    plt = _plt()
+    if plt is None:
         print("  skip plots (%s): matplotlib not installed" % name, flush=True)
         return []
+    pnl_dir = _ensure_dir(GRAPH_DIR_BACKTEST_PNL)
+    vars_dir = _ensure_dir(GRAPH_DIR_BACKTEST_VARS)
     written = []
 
     def finish(fig, ax, title, ylabel, outfile):
@@ -480,7 +570,7 @@ def save_backtest_plots(result):
     ax.legend(loc="best")
     finish(fig, ax, "Backtest cum PnL — %s  (%s)  mode=%s" % (
         name, spec.target, result.position_mode), "cum PnL (bp × position)",
-           "backtest_pnl_%s.png" % name)
+           str(pnl_dir / ("backtest_pnl_%s.png" % name)))
     feat = spec.features[0] if len(spec.features) == 1 else None
     fig, ax = plt.subplots(figsize=(12, 4))
     ax.plot(path.index, path["y_true"], color="C0", lw=1.0, label="y_true (%s)" % spec.target)
@@ -495,7 +585,7 @@ def save_backtest_plots(result):
     ax.legend(handles, labels, loc="best")
     finish(fig, ax, "Backtest variables — %s  %s ~ %s" % (
         name, spec.target, "+".join(spec.features)), "structure (bp)",
-           "backtest_vars_%s.png" % name)
+           str(vars_dir / ("backtest_vars_%s.png" % name)))
     return written
 
 
@@ -599,10 +689,15 @@ def send_summary_email(summary, asof=None, subject=None, to=None, body=None, att
     msg["From"], msg["To"] = mail_from, ", ".join(mail_to)
     msg.attach(MIMEText(text, "plain", "utf-8"))
     paths = list(attach_paths or [])
-    if not paths and EMAIL_ATTACH_CSV:
-        default_csv = Path("predictions_latest.csv")
-        if default_csv.exists():
-            paths = [str(default_csv)]
+    if not paths:
+        if EMAIL_ATTACH_CSV:
+            default_csv = Path("predictions_latest.csv")
+            if default_csv.exists():
+                paths.append(str(default_csv))
+        if EMAIL_ATTACH_GRAPHS:
+            evo = Path(GRAPH_DIR_EVOLUTION)
+            if evo.exists():
+                paths.extend(str(p) for p in sorted(evo.glob("*.png")))
     for p in paths:
         fp = Path(p)
         if not fp.exists():

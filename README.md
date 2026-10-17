@@ -1,13 +1,16 @@
 # SOFR Curve Screener
 
-| Mode | Command |
-|------|---------|
-| Explore | `python3.8 -u run_pipeline.py` |
-| Backtest | `python3.8 -u run_backtest.py` |
-| Prediction (live) | `python3.8 -u run_prediction.py --once` |
+| Mode | Command / notebook |
+|------|--------------------|
+| Prediction + email | `run_prediction.ipynb` (DataZone) or `python run_dz.py prediction --once` |
+| Explore | `python run_dz.py pipeline` |
+| Backtest | `python run_dz.py backtest` |
 
-Layout: `curve_config.py` (knobs) · `data.py` (I/O + BBG + structures) · `models.py` (OLS / z / strategy / email) · three runners.
+Knobs in `curve_config.py`:
+- `PREDICTION_EVERY_MINUTES` — loop/email cadence (default **30**)
+- `GRAPH_LOOKBACK_DAYS` — evolution charts use last **N calendar days**
+- Email: `EMAIL_ENABLED`, `SMTP_*`, `REPORT_TO`
 
-Prediction refreshes `sofr_live.csv` (BBG) then forecasts. `--no-refresh` skips BBG; `--pull-history` rebuilds history.
+PNGs land under `graphs/evolution/`, `graphs/backtest_pnl/`, `graphs/backtest_vars/`.
 
 Lock explore winners in `CHOSEN_MODELS`.
