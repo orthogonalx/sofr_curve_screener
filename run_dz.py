@@ -10,6 +10,7 @@ This launcher re-execs under Python 3.7 when needed, then bootstraps packages.
   python run_dz.py prediction --once
   python run_dz.py backtest
   python run_dz.py pipeline
+  python run_dz.py crosscheck          # python vs BBG USOS/UF structures → Excel
 """
 
 from __future__ import annotations
@@ -279,10 +280,12 @@ def main(argv=None) -> None:
         "backtest": "run_backtest.py",
         "pipeline": "run_pipeline.py",
         "explore": "run_pipeline.py",
+        "crosscheck": "crosscheck.py",
+        "xcheck": "crosscheck.py",
     }
     script = mapping.get(cmd)
     if script is None:
-        print("Unknown command %r. Use: prediction | backtest | pipeline" % cmd)
+        print("Unknown command %r. Use: prediction | backtest | pipeline | crosscheck" % cmd)
         raise SystemExit(2)
 
     _maybe_reexec_for_bbgapi()
