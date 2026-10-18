@@ -742,6 +742,60 @@ def pull_history_into_store(path=None, start_date=None, end_date=None, freq=None
     return hist
 
 
+def bbg_ticker_for_name(name):
+    """Map clean panel name → BBG ticker (CROSS_ASSET / USSFCT / USOSFR digit)."""
+    s = str(name).strip()
+    for clean, ticker in CROSS_ASSET:
+        if clean == s:
+            return ticker
+    if re.fullmatch(r"USSFCT\d+", s, re.I):
+        return "%s Curncy" % s.upper()
+    if str(s).isdigit():
+        return "%s%d %s" % (BBG_PREFIX, int(s), BBG_SUFFIX)
+    # listed curve / fly
+    for n, a, b in all_curves():
+        if n == s:
+            return bbg_curve_ticker(a, b)
+    for n, a, b, c in all_flies():
+        if n == s:
+            return bbg_fly_ticker(a, b, c)
+    return None
+
+
+def ensure_series_in_live_store(names, path=None):
+    """
+    If clean names are missing from the live store, pull their BBG tickers via bdib
+    and merge. Returns the updated raw live panel.
+    """
+    dest = path or LIVE_STORE_PATH
+    existing = load_live_store(dest) if Path(dest).exists() else pd.DataFrame()
+    have = set(clean_raw_columns(existing).columns) if not existing.empty else set()
+    need = [n for n in names if n not in have]
+    if not need:
+        return existing
+    tickers, unresolved = [], []
+    for n in need:
+        t = bbg_ticker_for_name(n)
+        if t:
+            tickers.append(t)
+        else:
+            unresolved.append(n)
+    if unresolved:
+        print("  [ensure] no BBG ticker for: %s" % unresolved, flush=True)
+    if not tickers:
+        return existing
+    print("  [ensure] pulling missing series: %s" % need, flush=True)
+    try:
+        extra = _fetch_bdib_panel(securities=tickers)
+    except Exception as exc:  # noqa: BLE001
+        print("  [ensure] bdib failed: %s" % exc, flush=True)
+        return existing
+    if extra is None or extra.empty:
+        print("  [ensure] bdib returned empty for %s" % tickers, flush=True)
+        return existing
+    return append_snapshot(extra, path=dest)
+
+
 def print_live_levels(data_raw, src=""):
     if data_raw is None or data_raw.empty:
         print("  [levels] empty panel", flush=True)
