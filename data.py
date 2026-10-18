@@ -745,8 +745,11 @@ def pull_history_into_store(path=None, start_date=None, end_date=None, freq=None
 def bbg_ticker_for_name(name):
     """Map clean panel name → BBG ticker (CROSS_ASSET / USSFCT / USOSFR digit)."""
     s = str(name).strip()
+    # Already a full BBG ticker (e.g. user pasted "CL1 Comdty" into CORR_SERIES)
+    if re.search(r"\s+(Comdty|Index|Curncy|Equity|Corp|Govt)\s*$", s, re.I):
+        return s
     for clean, ticker in CROSS_ASSET:
-        if clean == s:
+        if clean == s or str(ticker).strip().lower() == s.lower():
             return ticker
     if re.fullmatch(r"USSFCT\d+", s, re.I):
         return "%s Curncy" % s.upper()
