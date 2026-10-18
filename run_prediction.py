@@ -19,6 +19,7 @@ from data import build_panel, load_panel, print_live_levels, refresh_live_store
 from models import (
     PREDICTION_COLS,
     append_zscore_latest,
+    format_prediction_html,
     format_prediction_table,
     run_chosen_predictions,
     save_evolution_plots,
@@ -27,16 +28,17 @@ from models import (
 
 LAST_ASOF = ""
 LAST_TEXT = ""
+LAST_HTML = ""
 LAST_GRAPH_PATHS = []
 
 SEND_EMAIL_ON_PREDICTION = getattr(_curve_cfg, "SEND_EMAIL_ON_PREDICTION", True)
+EMAIL_INLINE_GRAPHS = getattr(_curve_cfg, "EMAIL_INLINE_GRAPHS", True)
 GRAPH_LOOKBACK_DAYS = getattr(_curve_cfg, "GRAPH_LOOKBACK_DAYS", 9)
 
 
 def _loop_minutes():
     if hasattr(_curve_cfg, "PREDICTION_EVERY_MINUTES"):
         return float(_curve_cfg.PREDICTION_EVERY_MINUTES)
-    # legacy: hours → minutes
     return float(getattr(_curve_cfg, "PREDICTION_EMAIL_EVERY_HOURS", 0.5)) * 60.0
 
 
@@ -47,7 +49,7 @@ def run_once(
     send_email: Optional[bool] = None,
     make_graphs: bool = True,
 ):
-    global LAST_ASOF, LAST_TEXT, LAST_GRAPH_PATHS
+    global LAST_ASOF, LAST_TEXT, LAST_HTML, LAST_GRAPH_PATHS
 
     if refresh or force_history:
         data_raw, src = refresh_live_store(force_history=force_history)
@@ -74,8 +76,7 @@ def run_once(
         % (asof, TRAIN_SIZE, DATA_BAR_MINUTES, show.to_string(index=False))
     )
     print(text, flush=True)
-    csv_path = Path("predictions_latest.csv")
-    csv_path.write_text(table.to_csv(index=False))
+    Path("predictions_latest.csv").write_text(table.to_csv(index=False))
     LAST_ASOF, LAST_TEXT = asof, text
 
     graph_paths = []
@@ -85,18 +86,33 @@ def run_once(
         )
     LAST_GRAPH_PATHS = list(graph_paths)
 
+    # CID list for HTML (prefer combined chart first)
+    graph_cids = []
+    inline_paths = []
+    if EMAIL_INLINE_GRAPHS and graph_paths:
+        ordered = sorted(
+            graph_paths,
+            key=lambda p: (0 if Path(p).name.startswith("evolution_structures") else 1, Path(p).name),
+        )
+        for i, p in enumerate(ordered):
+            cid = "graph%d" % i
+            title = Path(p).stem.replace("evolution_", "").replace("_", " ")
+            graph_cids.append((cid, title))
+            inline_paths.append(p)
+
+    html = format_prediction_html(table, asof=asof, graph_cids=graph_cids)
+    LAST_HTML = html
+
     do_email = SEND_EMAIL_ON_PREDICTION if send_email is None else bool(send_email)
     if do_email:
-        attach = []
-        if csv_path.exists():
-            attach.append(str(csv_path))
-        attach.extend(graph_paths)
         send_summary_email(
             table,
             asof=asof,
             subject="SOFR prediction %s" % asof,
             body=text,
-            attach_paths=attach or None,
+            html_body=html,
+            inline_images=inline_paths,
+            attach_paths=None,
         )
     return table
 

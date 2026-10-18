@@ -6,10 +6,11 @@ import os
 import smtplib
 from dataclasses import dataclass, field
 from email.mime.application import MIMEApplication
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -25,8 +26,9 @@ from curve_config import (
 )
 from data import resolve_feature_name
 
-EMAIL_ATTACH_CSV = getattr(_curve_cfg, "EMAIL_ATTACH_CSV", True)
-EMAIL_ATTACH_GRAPHS = getattr(_curve_cfg, "EMAIL_ATTACH_GRAPHS", True)
+EMAIL_ATTACH_CSV = getattr(_curve_cfg, "EMAIL_ATTACH_CSV", False)
+EMAIL_ATTACH_GRAPHS = getattr(_curve_cfg, "EMAIL_ATTACH_GRAPHS", False)
+EMAIL_INLINE_GRAPHS = getattr(_curve_cfg, "EMAIL_INLINE_GRAPHS", True)
 SMTP_USE_TLS = getattr(_curve_cfg, "SMTP_USE_TLS", True)
 GRAPH_LOOKBACK_DAYS = getattr(_curve_cfg, "GRAPH_LOOKBACK_DAYS", 9)
 GRAPH_DIR_EVOLUTION = getattr(_curve_cfg, "GRAPH_DIR_EVOLUTION", "graphs/evolution")
@@ -479,20 +481,32 @@ def _ensure_dir(path):
     return p
 
 
-def _slice_last_days(df, days):
-    """Keep rows in the last `days` calendar days (inclusive of last timestamp)."""
+def _slice_last_days(df, days, bar_minutes=None):
+    """
+    Last `days` calendar days of rows.
+    If the window is sparse/gapped (<2 points) — common with synthetic stores —
+    fall back to ~days worth of bars using DATA_BAR_MINUTES.
+    """
     if df is None or df.empty:
         return df
+    days = float(days)
     end = pd.Timestamp(df.index[-1])
-    start = end - pd.Timedelta(days=float(days))
-    return df.loc[df.index >= start]
+    sl = df.loc[df.index >= end - pd.Timedelta(days=days)]
+    if len(sl) >= 2:
+        return sl
+    bm = float(bar_minutes if bar_minutes is not None else DATA_BAR_MINUTES)
+    n_bars = max(int(round(days * (24.0 * 60.0 / max(bm, 1.0)))), 2)
+    n_bars = min(n_bars, len(df))
+    print(
+        "  [graphs] calendar window sparse (n=%d) → using last %d bars (~%g days @ %gm)"
+        % (len(sl), n_bars, days, bm),
+        flush=True,
+    )
+    return df.iloc[-n_bars:]
 
 
 def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
-    """
-    Plot CHOSEN structure levels over the last N calendar days.
-    Writes graphs/evolution/evolution_structures.png (+ one PNG per model).
-    """
+    """Plot CHOSEN structures over lookback; small PNGs for email inline."""
     days = GRAPH_LOOKBACK_DAYS if days is None else int(days)
     specs = list(specs or CHOSEN_MODELS)
     out_dir = _ensure_dir(out_dir or GRAPH_DIR_EVOLUTION)
@@ -514,39 +528,100 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
         print("  skip evolution plots: no target columns in full_data", flush=True)
         return []
 
-    # Combined chart
-    fig, ax = plt.subplots(figsize=(12, 4.5))
-    for t in targets:
-        ax.plot(panel.index, panel[t], lw=1.1, label=t)
-    ax.set_title("Structure levels — last %d calendar days" % days)
-    ax.set_ylabel("bp"); ax.set_xlabel("time")
-    ax.grid(True, alpha=0.3); ax.legend(loc="best", fontsize=8, ncol=2)
-    fig.tight_layout()
-    outfile = str(out_dir / "evolution_structures.png")
-    fig.savefig(outfile, dpi=120); plt.close(fig)
-    written.append(outfile)
+    def _save(fig, path):
+        fig.tight_layout()
+        fig.savefig(path, dpi=100, bbox_inches="tight")
+        plt.close(fig)
+        written.append(path)
 
-    # One chart per model: y + features
+    # Combined (compact)
+    fig, ax = plt.subplots(figsize=(5.8, 2.4))
+    for t in targets:
+        ax.plot(panel.index, panel[t], lw=1.0, label=t)
+    ax.set_title("Structures — last ~%d days  (n=%d)" % (days, len(panel)), fontsize=9)
+    ax.set_ylabel("bp", fontsize=8); ax.tick_params(labelsize=7)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best", fontsize=6, ncol=2, frameon=False)
+    _save(fig, str(out_dir / "evolution_structures.png"))
+
     for spec in specs:
-        cols = [spec.target] + [f for f in spec.features if f in panel.columns]
-        cols = [c for c in cols if c in panel.columns]
+        cols = [c for c in ([spec.target] + list(spec.features)) if c in panel.columns]
         if not cols:
             continue
-        fig, ax = plt.subplots(figsize=(12, 3.8))
+        fig, ax = plt.subplots(figsize=(5.2, 2.0))
         for c in cols:
             ax.plot(panel.index, panel[c], lw=1.0, label=c)
-        ax.set_title("%s — last %d days  (%s ~ %s)" % (
-            spec.name, days, spec.target, "+".join(spec.features)))
-        ax.set_ylabel("bp"); ax.set_xlabel("time")
-        ax.grid(True, alpha=0.3); ax.legend(loc="best", fontsize=8)
-        fig.tight_layout()
-        outfile = str(out_dir / ("evolution_%s.png" % spec.name))
-        fig.savefig(outfile, dpi=120); plt.close(fig)
-        written.append(outfile)
+        ax.set_title("%s  (%s)" % (spec.name, spec.target), fontsize=9)
+        ax.set_ylabel("bp", fontsize=8); ax.tick_params(labelsize=7)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best", fontsize=6, frameon=False)
+        _save(fig, str(out_dir / ("evolution_%s.png" % spec.name)))
 
-    print("  [graphs] evolution → %s  (%d files, %d days)" % (out_dir, len(written), days),
-          flush=True)
+    print("  [graphs] evolution → %s  (%d files, lookback~%d days, points=%d)"
+          % (out_dir, len(written), days, len(panel)), flush=True)
     return written
+
+
+def format_prediction_html(table, asof="", graph_cids=None):
+    """HTML body: header + colored table + optional inline CID images."""
+    cols = [c for c in PREDICTION_COLS if c in table.columns]
+    show = table[cols].copy() if cols else table.copy()
+    for c in show.columns:
+        if c in ("model", "structure", "features", "equation", "time", "n_lookback"):
+            continue
+        show[c] = pd.to_numeric(show[c], errors="coerce")
+
+    def _cell(v):
+        if v is None or (isinstance(v, float) and np.isnan(v)) or pd.isna(v):
+            return ""
+        if isinstance(v, (float, np.floating)):
+            return "%.3f" % float(v)
+        return str(v)
+
+    rows_html = []
+    for i, (_, row) in enumerate(show.iterrows()):
+        bg = "#ffffff" if i % 2 == 0 else "#f4f7fb"
+        tds = "".join(
+            '<td style="padding:6px 8px;border-bottom:1px solid #e6eaf0;font-size:12px;'
+            'font-family:Arial,sans-serif;white-space:nowrap;">%s</td>' % _cell(row[c])
+            for c in show.columns
+        )
+        rows_html.append('<tr style="background:%s;">%s</tr>' % (bg, tds))
+
+    th = "".join(
+        '<th style="padding:8px;background:#1f4e79;color:#fff;font-size:12px;'
+        'font-family:Arial,sans-serif;text-align:left;border:none;">%s</th>' % c
+        for c in show.columns
+    )
+    table_html = (
+        '<table style="border-collapse:collapse;width:100%%;max-width:960px;" cellpadding="0" cellspacing="0">'
+        "<thead><tr>%s</tr></thead><tbody>%s</tbody></table>"
+        % (th, "".join(rows_html))
+    )
+
+    imgs = ""
+    if graph_cids:
+        blocks = []
+        for cid, title in graph_cids:
+            blocks.append(
+                '<div style="display:inline-block;vertical-align:top;margin:4px 6px 8px 0;">'
+                '<div style="font:11px Arial,sans-serif;color:#445;margin-bottom:2px;">%s</div>'
+                '<img src="cid:%s" width="320" style="display:block;border:1px solid #dde3ea;border-radius:4px;" />'
+                "</div>" % (title, cid)
+            )
+        imgs = (
+            '<div style="margin-top:14px;">'
+            '<div style="font:13px Arial,sans-serif;color:#1f4e79;font-weight:bold;margin-bottom:6px;">'
+            "Evolution</div>%s</div>" % "".join(blocks)
+        )
+
+    return (
+        '<div style="font-family:Arial,sans-serif;color:#222;">'
+        '<div style="font-size:15px;font-weight:bold;color:#1f4e79;margin-bottom:4px;">SOFR prediction</div>'
+        '<div style="font-size:12px;color:#556;margin-bottom:12px;">asof %s &nbsp;|&nbsp; k=%s &nbsp;|&nbsp; next ~%sm</div>'
+        "%s%s</div>"
+        % (asof, TRAIN_SIZE, DATA_BAR_MINUTES, table_html, imgs)
+    )
 
 
 def save_backtest_plots(result):
@@ -663,7 +738,20 @@ def _cfg(name, default=""):
     return os.environ.get(name, default) or default
 
 
-def send_summary_email(summary, asof=None, subject=None, to=None, body=None, attach_paths=None):
+def send_summary_email(
+    summary,
+    asof=None,
+    subject=None,
+    to=None,
+    body=None,
+    html_body=None,
+    inline_images=None,
+    attach_paths=None,
+):
+    """
+    Send email. Prefer html_body + inline_images (CID) for visual prediction mails.
+    attach_paths only if explicitly requested (CSV/PNG attachments off by default).
+    """
     enabled = os.environ.get("EMAIL_ENABLED", str(EMAIL_ENABLED)).lower() in {"1", "true", "yes"}
     host, port = _cfg("SMTP_HOST", SMTP_HOST), int(_cfg("SMTP_PORT", str(SMTP_PORT)) or 587)
     user, password = _cfg("SMTP_USER", SMTP_USER), _cfg("SMTP_PASSWORD", SMTP_PASSWORD)
@@ -675,7 +763,7 @@ def send_summary_email(summary, asof=None, subject=None, to=None, body=None, att
     use_tls = os.environ.get("SMTP_USE_TLS", str(SMTP_USE_TLS)).lower() in {"1", "true", "yes"}
     text = body if body is not None else format_summary_text(summary, asof=asof)
     if not enabled or not host or not mail_to or not mail_from:
-        if body is None:
+        if body is None and html_body is None:
             print(text, flush=True)
         missing = [k for k, ok in (
             ("EMAIL_ENABLED", enabled), ("SMTP_HOST", host),
@@ -684,16 +772,32 @@ def send_summary_email(summary, asof=None, subject=None, to=None, body=None, att
         print("[email skipped] fill %s in curve_config.py (or env), then re-run" % ", ".join(missing),
               flush=True)
         return False
-    msg = MIMEMultipart("mixed")
-    msg["Subject"] = subject or ("SOFR prediction %s" % (asof or "")).strip()
-    msg["From"], msg["To"] = mail_from, ", ".join(mail_to)
-    msg.attach(MIMEText(text, "plain", "utf-8"))
+
+    inline = list(inline_images or [])
+    root = MIMEMultipart("related") if (html_body and inline) else MIMEMultipart("mixed")
+    root["Subject"] = subject or ("SOFR prediction %s" % (asof or "")).strip()
+    root["From"], root["To"] = mail_from, ", ".join(mail_to)
+
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(text, "plain", "utf-8"))
+    if html_body:
+        alt.attach(MIMEText(html_body, "html", "utf-8"))
+    root.attach(alt)
+
+    for i, p in enumerate(inline):
+        fp = Path(p)
+        if not fp.exists():
+            continue
+        img = MIMEImage(fp.read_bytes())
+        cid = "graph%d" % i
+        img.add_header("Content-ID", "<%s>" % cid)
+        img.add_header("Content-Disposition", "inline", filename=fp.name)
+        root.attach(img)
+
     paths = list(attach_paths or [])
-    if not paths:
-        if EMAIL_ATTACH_CSV:
-            default_csv = Path("predictions_latest.csv")
-            if default_csv.exists():
-                paths.append(str(default_csv))
+    if not paths and not html_body:
+        if EMAIL_ATTACH_CSV and Path("predictions_latest.csv").exists():
+            paths.append("predictions_latest.csv")
         if EMAIL_ATTACH_GRAPHS:
             evo = Path(GRAPH_DIR_EVOLUTION)
             if evo.exists():
@@ -701,19 +805,20 @@ def send_summary_email(summary, asof=None, subject=None, to=None, body=None, att
     for p in paths:
         fp = Path(p)
         if not fp.exists():
-            print("[email] missing attach %s" % fp, flush=True)
             continue
         part = MIMEApplication(fp.read_bytes(), Name=fp.name)
         part["Content-Disposition"] = 'attachment; filename="%s"' % fp.name
-        msg.attach(part)
+        root.attach(part)
+
     try:
         with smtplib.SMTP(host, port, timeout=30) as smtp:
             if use_tls:
                 smtp.starttls()
             if user:
                 smtp.login(user, password)
-            smtp.sendmail(mail_from, mail_to, msg.as_string())
-        print("[email sent] to=%s  subject=%r" % (", ".join(mail_to), msg["Subject"]), flush=True)
+            smtp.sendmail(mail_from, mail_to, root.as_string())
+        print("[email sent] to=%s  subject=%r  inline=%d"
+              % (", ".join(mail_to), root["Subject"], len(inline)), flush=True)
         return True
     except Exception as exc:
         print("[email FAILED] %s" % exc, flush=True)
