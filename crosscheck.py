@@ -30,36 +30,19 @@ from curve_config import (
 )
 from data import (
     _fetch_bdib_panel,
+    bbg_curve_ticker,
+    bbg_fly_ticker,
     build_full_data,
     clean_raw_columns,
+    curve_ticker_map,
     drop_non_trading_days,
+    fly_ticker_map,
     load_live_store,
     load_panel,
 )
 
 CROSSCHECK_PATH = getattr(_cfg, "CROSSCHECK_PATH", "sofr_structures_crosscheck.xlsx")
-BBG_CURVE_TICKER_PREFIX = getattr(_cfg, "BBG_CURVE_TICKER_PREFIX", "USOS")
-BBG_FLY_TICKER_PREFIX = getattr(_cfg, "BBG_FLY_TICKER_PREFIX", "UF")
-BBG_STRUCT_SUFFIX = getattr(_cfg, "BBG_STRUCT_SUFFIX", "Curncy")
 CROSSCHECK_TOL_BP = float(getattr(_cfg, "CROSSCHECK_TOL_BP", 1e-4))
-
-
-def bbg_curve_ticker(short: int, long_: int) -> str:
-    return "%s%02d%02d %s" % (BBG_CURVE_TICKER_PREFIX, int(short), int(long_), BBG_STRUCT_SUFFIX)
-
-
-def bbg_fly_ticker(left: int, body: int, right: int) -> str:
-    return "%s%02d%02d%02d %s" % (
-        BBG_FLY_TICKER_PREFIX, int(left), int(body), int(right), BBG_STRUCT_SUFFIX,
-    )
-
-
-def curve_ticker_map(curves=None) -> Dict[str, str]:
-    return {name: bbg_curve_ticker(a, b) for name, a, b in (curves or CURVES)}
-
-
-def fly_ticker_map(flies=None) -> Dict[str, str]:
-    return {name: bbg_fly_ticker(a, b, c) for name, a, b, c in (flies or FLIES)}
 
 
 def _side_by_side(python_s: pd.Series, bbg_s: pd.Series, name: str) -> pd.DataFrame:
@@ -162,7 +145,10 @@ def run_crosscheck(
         raw = _fetch_bdib_panel(start_date=start_date, end_date=end_date)
     raw = drop_non_trading_days(raw.apply(pd.to_numeric, errors="coerce"))
     cleaned = clean_raw_columns(raw)
-    full = build_full_data(cleaned, curves=curves, flies=flies, clean=False)
+    # Python side = always computed from outrights (ignore listed USOS/UF in store)
+    full = build_full_data(
+        cleaned, curves=curves, flies=flies, clean=False, force_compute=True,
+    )
 
     # Window for BBG structure pull: overlap with python panel
     start = start_date or (full.index.min() if len(full) else BBG_START_DATE)
