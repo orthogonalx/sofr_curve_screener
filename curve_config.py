@@ -94,19 +94,14 @@ def _expand_fwd_group_structures(
 
 FWD_CURVES, FWD_FLIES = _expand_fwd_group_structures(FWD_GROUPS)
 
-# ── Swap structures (built from outright USOSFR levels in the data file) ───────
-# INPUT data = outright swap levels only (USOSFR1, USOSFR2, …).
-# Curves / flies below are COMPUTED in structures.build_full_data from those
-# outrights — you do NOT put curve columns in the spreadsheet.
-#
-# To add a curve  XsYs     → append to CURVES:  ("XsYs", X, Y)
-# To add a fly   XsYsZs   → append to FLIES:   ("XsYsZs", X, Y, Z)
-#   e.g. 2s3s5s fly → ("2s3s5s", 2, 3, 5)
-# Formulae (percent → bp):
-#   curve  = (Y − X) * 100
-#   fly    = (2*Y − X − Z) * 100
-#
-# Required tenors must exist as outrights in the panel (e.g. 30s50s needs USOSFR50).
+# ── Swap structures (BBG listed curves / flies) ────────────────────────────────
+# Live pull fetches Bloomberg structure tickers (not computed from outrights):
+#   curve  XsYs   → USOS{X:02d}{Y:02d} Curncy     e.g. 5s10s → USOS0510 Curncy
+#   fly    XsYsZs → UF{X:02d}{Y:02d}{Z:02d} Curncy e.g. 5s7s10s → UF050710 Curncy
+# To add a curve / fly → append to CURVES / FLIES below (tickers follow automatically).
+# Fallback: if a BBG series is missing, build_full_data can still compute from
+# outrights (percent→bp): curve=(Y−X)*100, fly=(2Y−X−Z)*100.
+USE_BBG_SWAP_STRUCTURES = True
 
 CurveSpec = Tuple[str, int, int]       # (name, short, long)
 FlySpec = Tuple[str, int, int, int]    # (name, left, body, right)

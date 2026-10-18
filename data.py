@@ -21,6 +21,10 @@ from curve_config import (
 
 STRUCTURES_STORE_PATH = getattr(_cfg, "STRUCTURES_STORE_PATH", "sofr_structures.csv")
 us_holiday_dates = getattr(_cfg, "us_holiday_dates", None)
+USE_BBG_SWAP_STRUCTURES = getattr(_cfg, "USE_BBG_SWAP_STRUCTURES", True)
+BBG_CURVE_TICKER_PREFIX = getattr(_cfg, "BBG_CURVE_TICKER_PREFIX", "USOS")
+BBG_FLY_TICKER_PREFIX = getattr(_cfg, "BBG_FLY_TICKER_PREFIX", "UF")
+BBG_STRUCT_SUFFIX = getattr(_cfg, "BBG_STRUCT_SUFFIX", "Curncy")
 
 
 def drop_non_trading_days(df, holidays=None):
@@ -63,9 +67,50 @@ _FWD_RE = re.compile(
     r"^%s\s+(\d+)Y(\d+)Y\s*%s$" % (re.escape(BBG_FWD_PREFIX), re.escape(BBG_FWD_SUFFIX)), re.I
 )
 _FWD_CLEAN_RE = re.compile(r"^(\d+)[Yy](\d+)[Yy]$")
+# Listed swap curve / fly (not outright USOSFR): USOS0510 Curncy, UF050710 Curncy
+_BBG_CURVE_RE = re.compile(
+    r"^%s(\d{2})(\d{2})\s*%s$" % (re.escape(BBG_CURVE_TICKER_PREFIX), re.escape(BBG_STRUCT_SUFFIX)),
+    re.I,
+)
+_BBG_FLY_RE = re.compile(
+    r"^%s(\d{2})(\d{2})(\d{2})\s*%s$"
+    % (re.escape(BBG_FLY_TICKER_PREFIX), re.escape(BBG_STRUCT_SUFFIX)),
+    re.I,
+)
 _BQ = None
 _DT_FMT = "%Y-%m-%dT%H:%M:%S"
 _BBG_LOG_KEYS = ("bbg", "blp", "dz", "datazone", "activity", "kerberos", "ms.")
+
+
+def bbg_curve_ticker(short, long_):
+    return "%s%02d%02d %s" % (BBG_CURVE_TICKER_PREFIX, int(short), int(long_), BBG_STRUCT_SUFFIX)
+
+
+def bbg_fly_ticker(left, body, right):
+    return "%s%02d%02d%02d %s" % (
+        BBG_FLY_TICKER_PREFIX, int(left), int(body), int(right), BBG_STRUCT_SUFFIX,
+    )
+
+
+def curve_ticker_map(curves=None):
+    return {name: bbg_curve_ticker(a, b) for name, a, b in (curves or CURVES)}
+
+
+def fly_ticker_map(flies=None):
+    return {name: bbg_fly_ticker(a, b, c) for name, a, b, c in (flies or FLIES)}
+
+
+def _curve_name_by_legs(curves=None):
+    return {(int(a), int(b)): name for name, a, b in (curves or CURVES)}
+
+
+def _fly_name_by_legs(flies=None):
+    return {(int(a), int(b), int(c)): name for name, a, b, c in (flies or FLIES)}
+
+
+def structure_securities(curves=None, flies=None):
+    """BBG tickers for every CURVES / FLIES entry."""
+    return list(curve_ticker_map(curves).values()) + list(fly_ticker_map(flies).values())
 
 
 def load_raw(filepath, timestamp_col="time", sheet_name=0, ffill=True):
@@ -110,6 +155,15 @@ def generate_synthetic_sofr(tenors=None, n_bars=400, freq="3h", seed=42):
     if key in data:
         data[key] = data[key] + np.concatenate([np.zeros(n_bars - 20), np.full(20, 0.08)])
     df = pd.DataFrame(data, index=idx)
+    # Synthetic listed structures (same tickers as live BBG pull), in bp
+    for name, a, b in CURVES:
+        ca, cb = "%s%d %s" % (BBG_PREFIX, a, BBG_SUFFIX), "%s%d %s" % (BBG_PREFIX, b, BBG_SUFFIX)
+        if ca in df.columns and cb in df.columns:
+            df[bbg_curve_ticker(a, b)] = (df[cb] - df[ca]) * 100.0
+    for name, a, b, c in FLIES:
+        cols = ["%s%d %s" % (BBG_PREFIX, t, BBG_SUFFIX) for t in (a, b, c)]
+        if all(x in df.columns for x in cols):
+            df[bbg_fly_ticker(a, b, c)] = (2.0 * df[cols[1]] - df[cols[0]] - df[cols[2]]) * 100.0
     df.index.name = "time"
     return df
 
@@ -177,14 +231,28 @@ def ensure_seed_history(path=LIVE_STORE_PATH, seed_path=None, n_synthetic=400):
     return hist
 
 
-def _parse(col):
+def _parse(col, curves=None, flies=None):
     s = str(col).strip()
+    # Outright USOSFR{N} before listed USOS#### (avoid USOSFR10 matching as curve)
     m = _TENOR_RE.match(s)
     if m:
         return str(int(m.group(1)))
+    m = _BBG_CURVE_RE.match(s)
+    if m:
+        legs = (int(m.group(1)), int(m.group(2)))
+        return _curve_name_by_legs(curves).get(legs) or "%ds%ds" % legs
+    m = _BBG_FLY_RE.match(s)
+    if m:
+        legs = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        return _fly_name_by_legs(flies).get(legs) or "%ds%ds%ds" % legs
     m = _FWD_RE.match(s) or _FWD_CLEAN_RE.fullmatch(s)
     if m:
         return "%dy%dy" % (int(m.group(1)), int(m.group(2)))
+    # Already-cleaned structure names from CURVES/FLIES
+    curve_names = {spec[0] for spec in (curves or CURVES)}
+    fly_names = {spec[0] for spec in (flies or FLIES)}
+    if s in curve_names or s in fly_names:
+        return s
     m = re.fullmatch(r"(\d+)\s*[Yy]?", s)
     return str(int(m.group(1))) if m else None
 
@@ -219,13 +287,63 @@ def _structs(raw, specs, avail, key=str):
     return built, skipped
 
 
-def build_full_data(data_raw, curves=CURVES, flies=FLIES,
-                    fwd_curves=FWD_CURVES, fwd_flies=FWD_FLIES, clean=True):
+def build_full_data(
+    data_raw,
+    curves=CURVES,
+    flies=FLIES,
+    fwd_curves=FWD_CURVES,
+    fwd_flies=FWD_FLIES,
+    clean=True,
+    prefer_bbg=None,
+    force_compute=False,
+):
+    """
+    Build tenors + swap curves/flies + fwd structures.
+
+    prefer_bbg (default USE_BBG_SWAP_STRUCTURES): use BBG USOS/UF columns when
+    present; only compute missing ones from outrights.
+    force_compute: ignore BBG structure cols and always compute (cross-check).
+    """
     raw = clean_raw_columns(data_raw) if clean else data_raw.copy()
+    prefer_bbg = USE_BBG_SWAP_STRUCTURES if prefer_bbg is None else bool(prefer_bbg)
     tenors = {c for c in raw.columns if str(c).isdigit()}
     fwds = {c for c in raw.columns if _FWD_CLEAN_RE.fullmatch(str(c))}
-    cur, sk_c = _structs(raw, curves, tenors)
-    fly, sk_f = _structs(raw, flies, tenors)
+    curve_names = [s[0] for s in curves]
+    fly_names = [s[0] for s in flies]
+
+    if force_compute:
+        drop = [n for n in curve_names + fly_names if n in raw.columns]
+        if drop:
+            raw = raw.drop(columns=drop)
+        prefer_bbg = False
+
+    bbg_cur, bbg_fly = [], []
+    missing_curves, missing_flies = list(curves), list(flies)
+    if prefer_bbg:
+        have_c = [n for n in curve_names if n in raw.columns]
+        have_f = [n for n in fly_names if n in raw.columns]
+        bbg_cur = [raw[n].rename(n) for n in have_c]
+        bbg_fly = [raw[n].rename(n) for n in have_f]
+        missing_curves = [s for s in curves if s[0] not in raw.columns]
+        missing_flies = [s for s in flies if s[0] not in raw.columns]
+        if have_c or have_f:
+            print(
+                "  [structures] BBG listed: curves=%s  flies=%s"
+                % (have_c or "—", have_f or "—"),
+                flush=True,
+            )
+        if missing_curves or missing_flies:
+            print(
+                "  [structures] missing BBG → compute from outrights: curves=%s  flies=%s"
+                % (
+                    [s[0] for s in missing_curves] or "—",
+                    [s[0] for s in missing_flies] or "—",
+                ),
+                flush=True,
+            )
+
+    cur, sk_c = _structs(raw, missing_curves, tenors)
+    fly, sk_f = _structs(raw, missing_flies, tenors)
     if sk_c or sk_f:
         print(
             "  skip structures (missing tenors): curves=%s  flies=%s  have_tenors=%s"
@@ -243,13 +361,16 @@ def build_full_data(data_raw, curves=CURVES, flies=FLIES,
         m = _FWD_CLEAN_RE.fullmatch(n)
         return (int(m.group(2)), int(m.group(1)))
 
+    # Prefer BBG series; computed fills gaps only
     pieces = (
-        [raw[t].rename(t) for t in sorted(tenors, key=int)] + cur + fly
+        [raw[t].rename(t) for t in sorted(tenors, key=int)]
+        + bbg_cur + cur + bbg_fly + fly
         + [raw[c].rename(c) for c in sorted(fwds, key=_fkey)] + fcur + ffly
     )
     if not pieces:
         raise ValueError("No structures could be built — check raw tenors/forwards")
     full = pd.concat(pieces, axis=1)
+    full = full.loc[:, ~full.columns.duplicated(keep="first")]
     full.index = raw.index
     return full
 
@@ -291,10 +412,13 @@ def _securities():
     tenors = set()
     for _, *legs in list(CURVES) + list(FLIES):
         tenors.update(legs)
-    return (
+    secs = (
         ["%s%d %s" % (BBG_PREFIX, int(t), BBG_SUFFIX) for t in sorted(tenors)]
         + ["%s %dY%dY %s" % (BBG_FWD_PREFIX, int(s), int(g), BBG_FWD_SUFFIX) for s, g in FORWARDS]
     )
+    if USE_BBG_SWAP_STRUCTURES:
+        secs = secs + structure_securities()
+    return secs
 
 
 def _try_import_bbgapi():
@@ -581,7 +705,8 @@ def print_live_levels(data_raw, src=""):
     last, asof = cleaned.iloc[-1], cleaned.index[-1]
     tenors = sorted((c for c in cleaned.columns if str(c).isdigit()), key=int)
     fwds = [c for c in cleaned.columns if _FWD_CLEAN_RE.match(str(c))]
-    show = tenors + fwds[:8] or list(cleaned.columns[:12])
+    structs = [s[0] for s in list(CURVES)[:4] + list(FLIES)[:4] if s[0] in cleaned.columns]
+    show = tenors[:8] + structs + fwds[:4] or list(cleaned.columns[:12])
     parts = [
         "%s=nan" % c if pd.isna(last[c]) else "%s=%.4f" % (c, float(last[c])) for c in show
     ]

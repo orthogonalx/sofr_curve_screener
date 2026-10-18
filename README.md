@@ -10,6 +10,7 @@
 Knobs in `curve_config.py`:
 - `PREDICTION_EVERY_MINUTES` — loop/email cadence (default **30**)
 - `GRAPH_LOOKBACK_DAYS` — evolution charts use last **N calendar days**
+- `USE_BBG_SWAP_STRUCTURES` — CURVES/FLIES from BBG `USOS####` / `UF######` (default **True**)
 - Email: `EMAIL_ENABLED`, `SMTP_*`, `REPORT_TO`
 
 PNGs land under `graphs/evolution/`, `graphs/backtest_pnl/`, `graphs/backtest_vars/`.
