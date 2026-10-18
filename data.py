@@ -20,6 +20,41 @@ from curve_config import (
 )
 
 STRUCTURES_STORE_PATH = getattr(_cfg, "STRUCTURES_STORE_PATH", "sofr_structures.csv")
+us_holiday_dates = getattr(_cfg, "us_holiday_dates", None)
+
+
+def drop_non_trading_days(df, holidays=None):
+    """
+    Drop weekends and US market holidays (no session → no real SOFR prints).
+    Holidays include federal days (e.g. 2026-10-12 Columbus Day) + Good Friday.
+    """
+    if df is None or df.empty:
+        return df
+    idx = pd.DatetimeIndex(df.index)
+    if idx.tz is not None:
+        days = idx.tz_convert(None).normalize()
+    else:
+        days = idx.normalize()
+    if holidays is None:
+        if us_holiday_dates is None:
+            hol = pd.DatetimeIndex([])
+        else:
+            hol = us_holiday_dates(
+                days.min() - pd.Timedelta(days=7),
+                days.max() + pd.Timedelta(days=7),
+            )
+    else:
+        hol = pd.DatetimeIndex(pd.to_datetime(list(holidays))).normalize()
+    mask = (idx.dayofweek < 5) & (~days.isin(hol))
+    out = df.loc[mask]
+    n_drop = len(df) - len(out)
+    if n_drop:
+        print(
+            "  [calendar] dropped %d weekend/holiday bars (%d → %d)"
+            % (n_drop, len(df), len(out)),
+            flush=True,
+        )
+    return out
 
 BBGAPI_VERSION = getattr(_cfg, "BBGAPI_VERSION", "2022.09.26-2")
 BBGAPI_PATH = getattr(_cfg, "BBGAPI_PATH", "")
@@ -85,7 +120,7 @@ def load_live_store(path=LIVE_STORE_PATH):
 
 
 def save_live_store(df, path=LIVE_STORE_PATH):
-    out = df.sort_index()
+    out = drop_non_trading_days(df.sort_index())
     out.index.name = "time"
     out.to_csv(path)
     return Path(path).resolve()
@@ -124,7 +159,9 @@ def append_snapshot(snapshot, path=LIVE_STORE_PATH, max_bars=MAX_HISTORY_BARS):
     else:
         combined = pd.concat([existing, snap], axis=0)
         combined = combined[~combined.index.duplicated(keep="last")].sort_index()
-    combined = combined.apply(pd.to_numeric, errors="coerce").ffill()
+    combined = drop_non_trading_days(
+        combined.apply(pd.to_numeric, errors="coerce")
+    ).ffill()
     if max_bars is not None and len(combined) > max_bars:
         combined = combined.iloc[-max_bars:]
     save_live_store(combined, path)
@@ -589,9 +626,11 @@ def load_panel():
 def build_panel(data_raw, save_structures=True):
     if not isinstance(data_raw.index, pd.DatetimeIndex):
         raise TypeError("data_raw must be indexed by time")
-    cleaned, full, pred = build_datasets(
-        data_raw.apply(pd.to_numeric, errors="coerce").ffill()
+    # Drop Sat/Sun + US holidays before ffill so we never invent holiday prints.
+    raw = drop_non_trading_days(
+        data_raw.apply(pd.to_numeric, errors="coerce")
     )
+    cleaned, full, pred = build_datasets(raw.ffill())
     if save_structures:
         try:
             save_structures_store(full)

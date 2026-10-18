@@ -333,6 +333,35 @@ STRUCTURES_STORE_PATH = "sofr_structures.csv"
 # 100 days × 8 bars/day at 3h ≈ 800; +buffer for weekends/extra prints
 MAX_HISTORY_BARS = MAX_HISTORY_DAYS * (24 * 60 // BBG_INTERVAL_MINUTES) + 50
 
+# ── US market holidays (no SOFR / rates session → drop these calendar dates) ──
+# Federal holidays (incl. Columbus Day / Indigenous Peoples' Day, e.g. 2026-10-12)
+# plus Good Friday (SIFMA / futures typically closed). Built from pandas calendars.
+US_HOLIDAY_START = "2018-01-01"
+US_HOLIDAY_END = "2035-12-31"
+
+
+def us_holiday_dates(start=None, end=None):
+    """DatetimeIndex of US rates-market holidays (normalized, tz-naive)."""
+    import pandas as pd
+    from pandas.tseries.holiday import (
+        AbstractHolidayCalendar,
+        GoodFriday,
+        USFederalHolidayCalendar,
+    )
+
+    start = pd.Timestamp(start or US_HOLIDAY_START)
+    end = pd.Timestamp(end or US_HOLIDAY_END)
+
+    class _USRatesHolidayCalendar(AbstractHolidayCalendar):
+        rules = list(USFederalHolidayCalendar.rules) + [GoodFriday]
+
+    hol = _USRatesHolidayCalendar().holidays(start=start, end=end)
+    return pd.DatetimeIndex(hol).tz_localize(None).normalize().unique().sort_values()
+
+
+# Materialized list for inspection / debugging (regenerated at import).
+US_HOLIDAYS = [d.strftime("%Y-%m-%d") for d in us_holiday_dates()]
+
 # Email (override via env: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
 #        REPORT_TO, REPORT_FROM, EMAIL_ENABLED, SMTP_USE_TLS)
 # Fill REPORT_TO + SMTP_HOST, then set EMAIL_ENABLED = True.
