@@ -26,6 +26,16 @@ BBG_CURVE_TICKER_PREFIX = getattr(_cfg, "BBG_CURVE_TICKER_PREFIX", "USOS")
 BBG_FLY_TICKER_PREFIX = getattr(_cfg, "BBG_FLY_TICKER_PREFIX", "UF")
 BBG_STRUCT_SUFFIX = getattr(_cfg, "BBG_STRUCT_SUFFIX", "Curncy")
 CROSS_ASSET = list(getattr(_cfg, "CROSS_ASSET", []))
+CUSTOM_CURVES = list(getattr(_cfg, "CUSTOM_CURVES", []))
+CUSTOM_FLIES = list(getattr(_cfg, "CUSTOM_FLIES", []))
+
+
+def all_curves():
+    return list(CURVES) + list(CUSTOM_CURVES)
+
+
+def all_flies():
+    return list(FLIES) + list(CUSTOM_FLIES)
 
 
 def drop_non_trading_days(df, holidays=None):
@@ -94,24 +104,27 @@ def bbg_fly_ticker(left, body, right):
 
 
 def curve_ticker_map(curves=None):
-    return {name: bbg_curve_ticker(a, b) for name, a, b in (curves or CURVES)}
+    return {name: bbg_curve_ticker(a, b) for name, a, b in (curves or all_curves())}
 
 
 def fly_ticker_map(flies=None):
-    return {name: bbg_fly_ticker(a, b, c) for name, a, b, c in (flies or FLIES)}
+    return {name: bbg_fly_ticker(a, b, c) for name, a, b, c in (flies or all_flies())}
 
 
 def _curve_name_by_legs(curves=None):
-    return {(int(a), int(b)): name for name, a, b in (curves or CURVES)}
+    return {(int(a), int(b)): name for name, a, b in (curves or all_curves())}
 
 
 def _fly_name_by_legs(flies=None):
-    return {(int(a), int(b), int(c)): name for name, a, b, c in (flies or FLIES)}
+    return {(int(a), int(b), int(c)): name for name, a, b, c in (flies or all_flies())}
 
 
 def structure_securities(curves=None, flies=None):
-    """BBG tickers for every CURVES / FLIES entry."""
-    return list(curve_ticker_map(curves).values()) + list(fly_ticker_map(flies).values())
+    """BBG tickers for every CURVES / FLIES / CUSTOM_* entry."""
+    return (
+        list(curve_ticker_map(curves or all_curves()).values())
+        + list(fly_ticker_map(flies or all_flies()).values())
+    )
 
 
 def load_raw(filepath, timestamp_col="time", sheet_name=0, ffill=True):
@@ -157,15 +170,15 @@ def generate_synthetic_sofr(tenors=None, n_bars=400, freq="3h", seed=42):
         data[key] = data[key] + np.concatenate([np.zeros(n_bars - 20), np.full(20, 0.08)])
     df = pd.DataFrame(data, index=idx)
     # Synthetic listed structures (same tickers as live BBG pull), in bp
-    for name, a, b in CURVES:
+    for name, a, b in all_curves():
         ca, cb = "%s%d %s" % (BBG_PREFIX, a, BBG_SUFFIX), "%s%d %s" % (BBG_PREFIX, b, BBG_SUFFIX)
         if ca in df.columns and cb in df.columns:
             df[bbg_curve_ticker(a, b)] = (df[cb] - df[ca]) * 100.0
-    for name, a, b, c in FLIES:
+    for name, a, b, c in all_flies():
         cols = ["%s%d %s" % (BBG_PREFIX, t, BBG_SUFFIX) for t in (a, b, c)]
         if all(x in df.columns for x in cols):
             df[bbg_fly_ticker(a, b, c)] = (2.0 * df[cols[1]] - df[cols[0]] - df[cols[2]]) * 100.0
-    # Synthetic cross-assets
+    # Synthetic cross-assets / extras
     for clean, ticker in CROSS_ASSET:
         df[ticker] = 100.0 + np.cumsum(rng.normal(0, 0.5, n_bars))
     df.index.name = "time"
@@ -252,9 +265,9 @@ def _parse(col, curves=None, flies=None):
     m = _FWD_RE.match(s) or _FWD_CLEAN_RE.fullmatch(s)
     if m:
         return "%dy%dy" % (int(m.group(1)), int(m.group(2)))
-    # Already-cleaned structure names from CURVES/FLIES
-    curve_names = {spec[0] for spec in (curves or CURVES)}
-    fly_names = {spec[0] for spec in (flies or FLIES)}
+    # Already-cleaned structure names (incl. CUSTOM_*)
+    curve_names = {spec[0] for spec in (curves or all_curves())}
+    fly_names = {spec[0] for spec in (flies or all_flies())}
     if s in curve_names or s in fly_names:
         return s
     # Cross-asset: map BBG ticker → clean name (and accept clean name as-is)
@@ -300,14 +313,16 @@ def _structs(raw, specs, avail, key=str):
 
 def build_full_data(
     data_raw,
-    curves=CURVES,
-    flies=FLIES,
+    curves=None,
+    flies=None,
     fwd_curves=FWD_CURVES,
     fwd_flies=FWD_FLIES,
     clean=True,
     prefer_bbg=None,
     force_compute=False,
 ):
+    curves = list(curves) if curves is not None else all_curves()
+    flies = list(flies) if flies is not None else all_flies()
     """
     Build tenors + swap curves/flies + fwd structures.
 
@@ -393,7 +408,7 @@ def build_predicted_data(full_data, predicted=PREDICTED):
     return full_data.loc[:, cols].copy()
 
 
-def build_datasets(data_raw, curves=CURVES, flies=FLIES, predicted=PREDICTED):
+def build_datasets(data_raw, curves=None, flies=None, predicted=PREDICTED):
     cleaned = clean_raw_columns(data_raw)
     full = build_full_data(cleaned, curves=curves, flies=flies, clean=False)
     return cleaned, full, build_predicted_data(full, predicted=predicted)
@@ -415,7 +430,7 @@ def _quiet_bbg_logs():
 
 def _securities():
     tenors = set()
-    for _, *legs in list(CURVES) + list(FLIES):
+    for _, *legs in list(all_curves()) + list(all_flies()):
         tenors.update(legs)
     secs = (
         ["%s%d %s" % (BBG_PREFIX, int(t), BBG_SUFFIX) for t in sorted(tenors)]
@@ -424,7 +439,13 @@ def _securities():
     if USE_BBG_SWAP_STRUCTURES:
         secs = secs + structure_securities()
     secs = secs + [t for _, t in CROSS_ASSET]
-    return secs
+    # de-dupe preserving order
+    seen, out = set(), []
+    for s in secs:
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
 
 
 def _try_import_bbgapi():

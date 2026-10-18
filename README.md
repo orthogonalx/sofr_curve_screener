@@ -6,8 +6,9 @@
 | Explore | `python run_dz.py pipeline` |
 | Backtest | `python run_dz.py backtest` (OOS fit + residual strategy scorecard) |
 | Cross-check | `run_crosscheck.ipynb` or `python run_dz.py crosscheck` |
-| Correlations | `run_correlations.ipynb` or `python run_dz.py correlations` |
+| Correlations | `run_correlations.ipynb` — edit **`CORR_SERIES`** in `curve_config.py` |
+| Custom prediction | `run_custom.ipynb` — edit **`CUSTOM_MODELS`** (+ `CUSTOM_CURVES` / `CROSS_ASSET` if new) |
 
-Knobs: `PREDICTION_EVERY_MINUTES`, `GRAPH_LOOKBACK_DAYS`, `USE_BBG_SWAP_STRUCTURES`, `CROSS_ASSET` / `CORR_SERIES`, email `SMTP_*`.
+Knobs: `CORR_SERIES`, `CUSTOM_MODELS`, `CUSTOM_CURVES`, `CROSS_ASSET`, `USE_BBG_SWAP_STRUCTURES`, email `SMTP_*`.
 
-CURVES/FLIES = BBG `USOS####` / `UF######`. Fwd flies = built. Cross-assets = `CROSS_ASSET`.
+CURVES/FLIES = BBG `USOS`/`UF`. Custom series: add to `CUSTOM_*` / `CROSS_ASSET`, then `--pull-history`.
