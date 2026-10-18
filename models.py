@@ -24,7 +24,7 @@ from curve_config import (
     TRAIN_SIZE, ZSCORE_LOOKBACKS, ZSCORE_MODELS, ZSCORE_WINDOW, RegressionScreen,
     RegressionSpec, ZScoreSpec,
 )
-from data import resolve_feature_name
+from data import drop_non_trading_days, resolve_feature_name
 
 EMAIL_ATTACH_CSV = getattr(_curve_cfg, "EMAIL_ATTACH_CSV", False)
 EMAIL_ATTACH_GRAPHS = getattr(_curve_cfg, "EMAIL_ATTACH_GRAPHS", False)
@@ -608,18 +608,17 @@ def _obs_x(index):
 
 def _filter_trading_bars(df, bar_minutes=None):
     """
-    Drop weekends and stale ffill rows after a long gap (holidays).
-    Keeps Mon–Fri sessions only so plots do not draw flat weekend spans.
+    Drop weekends, US holidays, and stale ffill rows after a long gap.
+    Keeps trading sessions only so plots do not draw flat holiday/weekend spans.
     """
     if df is None or df.empty:
         return df
     bm = float(bar_minutes if bar_minutes is not None else DATA_BAR_MINUTES)
-    idx = pd.DatetimeIndex(df.index)
-    out = df.loc[idx.dayofweek < 5].copy()
+    out = drop_non_trading_days(df)
     if len(out) < 2:
         return out
     # Remove bars that are exact copies of the previous bar after a >1.5-bar gap
-    # (typical ffill across a holiday).
+    # (leftover ffill across an unlisted closure).
     keep = np.ones(len(out), dtype=bool)
     vals = out.to_numpy(dtype=float)
     times = out.index
@@ -632,18 +631,10 @@ def _filter_trading_bars(df, bar_minutes=None):
         if np.allclose(a, b, equal_nan=True):
             keep[i] = False
     trimmed = out.loc[keep]
-    # Walk forward again: also drop Sat/Sun already gone; drop any remaining
-    # weekday rows whose calendar date has zero unique movement vs prior day
-    # is unnecessary — weekday filter + stale-gap is enough.
     if len(trimmed) < len(out):
         print(
-            "  [graphs] dropped %d weekend/stale bars (%d → %d)"
-            % (len(out) - len(trimmed), len(df), len(trimmed)),
-            flush=True,
-        )
-    elif len(out) < len(df):
-        print(
-            "  [graphs] dropped weekends (%d → %d bars)" % (len(df), len(out)),
+            "  [graphs] dropped %d stale bars after holiday/weekend filter (%d → %d)"
+            % (len(out) - len(trimmed), len(out), len(trimmed)),
             flush=True,
         )
     return trimmed
