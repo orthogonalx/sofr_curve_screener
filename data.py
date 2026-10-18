@@ -327,19 +327,10 @@ def build_full_data(
         bbg_fly = [raw[n].rename(n) for n in have_f]
         missing_curves = [s for s in curves if s[0] not in raw.columns]
         missing_flies = [s for s in flies if s[0] not in raw.columns]
-        if have_c or have_f:
-            print(
-                "  [structures] BBG listed: curves=%s  flies=%s"
-                % (have_c or "—", have_f or "—"),
-                flush=True,
-            )
         if missing_curves or missing_flies:
             print(
-                "  [structures] missing BBG → compute from outrights: curves=%s  flies=%s"
-                % (
-                    [s[0] for s in missing_curves] or "—",
-                    [s[0] for s in missing_flies] or "—",
-                ),
+                "  [structures] compute missing: %s"
+                % ([s[0] for s in missing_curves + missing_flies] or "—"),
                 flush=True,
             )
 

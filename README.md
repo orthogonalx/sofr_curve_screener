@@ -1,18 +1,12 @@
 # SOFR Curve Screener
 
-| Mode | Command / notebook |
-|------|--------------------|
-| Prediction + email | `run_prediction.ipynb` (DataZone) or `python run_dz.py prediction --once` |
+| Mode | Command |
+|------|---------|
+| Prediction | `run_prediction.ipynb` or `python run_dz.py prediction --once` |
 | Explore | `python run_dz.py pipeline` |
 | Backtest | `python run_dz.py backtest` |
-| Structure cross-check | **`run_crosscheck.ipynb`** (DataZone) o `python run_dz.py crosscheck` → `sofr_structures_crosscheck.xlsx` |
+| Cross-check | `run_crosscheck.ipynb` or `python run_dz.py crosscheck` |
 
-Knobs in `curve_config.py`:
-- `PREDICTION_EVERY_MINUTES` — loop/email cadence (default **30**)
-- `GRAPH_LOOKBACK_DAYS` — evolution charts use last **N calendar days**
-- `USE_BBG_SWAP_STRUCTURES` — CURVES/FLIES from BBG `USOS####` / `UF######` (default **True**)
-- Email: `EMAIL_ENABLED`, `SMTP_*`, `REPORT_TO`
+Knobs in `curve_config.py`: `PREDICTION_EVERY_MINUTES`, `GRAPH_LOOKBACK_DAYS`, `USE_BBG_SWAP_STRUCTURES`, email `SMTP_*` / `REPORT_TO`.
 
-PNGs land under `graphs/evolution/`, `graphs/backtest_pnl/`, `graphs/backtest_vars/`.
-
-Lock explore winners in `CHOSEN_MODELS`.
+CURVES/FLIES = BBG `USOS####` / `UF######`. Fwd curves/flies = built from `S0490FS`.

@@ -17,7 +17,9 @@ backtest_pnl_*.png
 backtest_vars_*.png
 sofr_live.csv
 sofr_structures.csv
+sofr_structures_crosscheck.xlsx
 email_preview.html
+residual_report.csv
 residual_evolution*.png
 graphs/
 
