@@ -157,13 +157,10 @@ def run_crosscheck(
     # ── BBG side (listed curve / fly tickers) ─────────────────────────────────
     struct_secs = list(c_map.values()) + list(f_map.values())
     print(
-        "  [crosscheck] pulling %d BBG structure tickers  %s → %s  interval=%sm"
-        % (len(struct_secs), start, end or "now", BBG_INTERVAL_MINUTES),
+        "  [crosscheck] %d BBG tickers  %s → %s"
+        % (len(struct_secs), start, end or "now"),
         flush=True,
     )
-    for name, tkr in list(c_map.items()) + list(f_map.items()):
-        print("           %s → %s" % (name, tkr), flush=True)
-
     bbg_raw = _fetch_bdib_panel(
         start_date=start, end_date=end, securities=struct_secs,
     )

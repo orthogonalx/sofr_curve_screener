@@ -26,8 +26,6 @@ from curve_config import (
 )
 from data import drop_non_trading_days, resolve_feature_name
 
-EMAIL_ATTACH_CSV = getattr(_curve_cfg, "EMAIL_ATTACH_CSV", False)
-EMAIL_ATTACH_GRAPHS = getattr(_curve_cfg, "EMAIL_ATTACH_GRAPHS", False)
 EMAIL_INLINE_GRAPHS = getattr(_curve_cfg, "EMAIL_INLINE_GRAPHS", True)
 SMTP_USE_TLS = getattr(_curve_cfg, "SMTP_USE_TLS", True)
 GRAPH_LOOKBACK_DAYS = getattr(_curve_cfg, "GRAPH_LOOKBACK_DAYS", 9)
@@ -91,27 +89,12 @@ def format_prediction_table(table):
     if table is None or table.empty:
         return table
     out = table.copy()
-    # legacy → current names
-    if "residual" not in out.columns:
-        for src in ("residuo", "residual_prev"):
-            if src in out.columns:
-                out["residual"] = out[src]
-                break
-    if "residual_std" not in out.columns and "residuo_std" in out.columns:
-        out["residual_std"] = out["residuo_std"]
-    if "time_last" not in out.columns:
-        for src in ("asof_prev", "time"):
-            if src in out.columns:
-                out["time_last"] = out[src]
-                break
-    if "n_periods" not in out.columns and "n_lookback" in out.columns:
-        out["n_periods"] = out["n_lookback"].map(_n_periods_label)
     if "side" not in out.columns and "residual" in out.columns:
         out["side"] = out["residual"].map(_side_from_residual)
     for c in list(out.columns):
         if c in (
             "predicted_level", "y_pred_prev", "y_realized_prev", "residual",
-            "residual_std", "residuo", "residuo_std", "residual_prev", "intercept",
+            "residual_std", "intercept",
         ) or str(c).startswith("beta_"):
             out[c] = pd.to_numeric(out[c], errors="coerce").round(3)
     ordered = [c for c in PREDICTION_COLS if c in out.columns]
@@ -402,14 +385,9 @@ def fit_predict_next(
         "time_last": t_prev,
         "equation": equation_from_beta(spec.target, spec.features, beta_now, add_intercept),
         "n_periods": _n_periods_label(k),
-        "n_lookback": k,  # legacy
-        "time": t_next,  # next-bar stamp (legacy)
-        "residuo": residual,
-        "residuo_std": residual_std,
-        "residual_prev": residual,
+        "time": t_next,
         "train_start": y_all.index[n - k - 1],
         "train_end": y_all.index[n - 2],
-        "asof_prev": t_prev,
     }
     row.update({kk: _round3(vv) for kk, vv in _coef_dict(spec.features, beta_now, add_intercept).items()})
     return row
@@ -734,47 +712,11 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
     )
     _style_obs_axis(ax, panel.index)
     _save(fig, str(out_dir / "evolution_structures.png"))
-
-    # Per model: target on LEFT, feature(s) on RIGHT
-    for spec in specs:
-        y_col = spec.target if spec.target in panel.columns else None
-        x_cols = [f for f in spec.features if f in panel.columns]
-        if y_col is None and not x_cols:
-            continue
-        use_cols = ([y_col] if y_col else []) + x_cols
-        sub = _filter_trading_bars(panel[use_cols].dropna(how="all"))
-        if sub.empty:
-            continue
-        xx = _obs_x(sub.index)
-        fig, ax = plt.subplots(figsize=(5.4, 2.2))
-        handles, labels = [], []
-        if y_col is not None:
-            ln, = ax.plot(
-                xx, _y_with_gap_breaks(sub.index, sub[y_col].to_numpy(dtype=float)),
-                lw=1.2, color="C0", label=y_col,
-            )
-            handles.append(ln); labels.append(y_col)
-            ax.set_ylabel(y_col, fontsize=8, color="C0")
-            ax.tick_params(axis="y", labelcolor="C0", labelsize=7)
-        ax.grid(True, alpha=0.3)
-        if x_cols:
-            ax2 = ax.twinx()
-            for i, c in enumerate(x_cols):
-                ln, = ax2.plot(
-                    xx, _y_with_gap_breaks(sub.index, sub[c].to_numpy(dtype=float)),
-                    lw=1.0, color="C%d" % (i + 1), label=c, alpha=0.9,
-                )
-                handles.append(ln); labels.append(c)
-            ax2.set_ylabel(" / ".join(x_cols), fontsize=7, color="C1")
-            ax2.tick_params(axis="y", labelcolor="C1", labelsize=7)
-        ax.legend(handles, labels, loc="best", fontsize=6, frameon=False)
-        ax.set_title("%s  |  left=%s  right=%s" % (
-            spec.name, y_col or "—", "+".join(x_cols) if x_cols else "—"), fontsize=8)
-        _style_obs_axis(ax, sub.index)
-        _save(fig, str(out_dir / ("evolution_%s.png" % spec.name)))
-
-    print("  [graphs] evolution → %s  (%d files, lookback~%d days, trading_bars=%d)"
-          % (out_dir, len(written), days, len(panel)), flush=True)
+    print(
+        "  [graphs] evolution → %s  (lookback~%d days, bars=%d)"
+        % (out_dir, days, len(panel)),
+        flush=True,
+    )
     return written
 
 
@@ -784,7 +726,7 @@ def format_prediction_html(table, asof="", graph_cids=None):
     show = table[cols].copy() if cols else table.copy()
     skip_num = {
         "model", "structure", "features", "equation", "time", "time_last",
-        "n_lookback", "n_periods", "side",
+        "n_periods", "side",
     }
     for c in show.columns:
         if c in skip_num:
@@ -920,8 +862,7 @@ def append_zscore_latest(table, full_data):
             "y_pred_prev": _NAN, "y_realized_prev": _round3(last["value"]),
             "time_last": t_prev,
             "equation": "", "n_periods": "",
-            "n_lookback": "", "time": t_next, "asof_prev": t_prev,
-            "residuo": z50, "residuo_std": _NAN, "residual_prev": z50,
+            "time": t_next,
         }
         for c in z_cols:
             if c in last.index:
@@ -1032,15 +973,7 @@ def send_summary_email(
         img.add_header("Content-Disposition", "inline", filename=fp.name)
         root.attach(img)
 
-    paths = list(attach_paths or [])
-    if not paths and not html_body:
-        if EMAIL_ATTACH_CSV and Path("predictions_latest.csv").exists():
-            paths.append("predictions_latest.csv")
-        if EMAIL_ATTACH_GRAPHS:
-            evo = Path(GRAPH_DIR_EVOLUTION)
-            if evo.exists():
-                paths.extend(str(p) for p in sorted(evo.glob("*.png")))
-    for p in paths:
+    for p in list(attach_paths or []):
         fp = Path(p)
         if not fp.exists():
             continue
