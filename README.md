@@ -8,6 +8,7 @@
 | Cross-check | `run_crosscheck.ipynb` or `python run_dz.py crosscheck` |
 | Correlations | `run_correlations.ipynb` — edit **`CORR_SERIES`** in `curve_config.py` |
 | Custom prediction | `run_custom.ipynb` — edit **`CUSTOM_MODELS`** (+ `CUSTOM_CURVES` / `CROSS_ASSET` if new) |
+| Period moves | `run_period_moves.ipynb` — change + std between two timestamps |
 
 Knobs: `CORR_SERIES`, `CUSTOM_MODELS`, `CUSTOM_CURVES`, `CROSS_ASSET`, `USE_BBG_SWAP_STRUCTURES`, email `SMTP_*`.
 

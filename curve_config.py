@@ -226,6 +226,9 @@ CROSS_ASSET: List[Tuple[str, str]] = [
     ("USGG10YR", "USGG10YR Index"),
     ("ESA", "ESA Index"),           # Euro Stoxx futures — corr scatter
     ("SFRH7", "SFRH7 Comdty"),
+    ("USSFCT05", "USSFCT05 Curncy"),  # SOFR vs Fed Funds 5y
+    ("USSFCT10", "USSFCT10 Curncy"),
+    ("USSFCT30", "USSFCT30 Curncy"),
 ]
 
 # ── Correlation notebook: EDIT THIS LIST to choose matrix columns ─────────────
@@ -260,4 +263,13 @@ CUSTOM_FLIES: List[FlySpec] = [
 # add to CUSTOM_CURVES / CUSTOM_FLIES / CROSS_ASSET and --pull-history.
 CUSTOM_MODELS: List[RegressionSpec] = [
     RegressionSpec(target="2s10s", features=("SFRH7",), name="c_2s10s_sfrh7"),
+]
+
+# ── Period move tables (run_period_moves.ipynb) ────────────────────────────────
+# Outright tenors (clean names = years as strings from USOSFR)
+MOVE_OUTRIGHTS: List[str] = ["2", "5", "10", "30"]
+# Curves / flies / spreads (structures + CROSS_ASSET clean names)
+MOVE_STRUCTURES: List[str] = [
+    "2s5s", "5s10s", "10s30s", "2s5s10s", "5s10s30s",
+    "USSFCT05", "USSFCT10", "USSFCT30",
 ]
