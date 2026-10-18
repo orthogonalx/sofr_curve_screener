@@ -234,7 +234,8 @@ CORR_SERIES: List[str] = [
     "SPX", "CO1", "DXY", "USGG10YR",
 ]
 CORR_WINDOW = 50          # rolling window for pairwise correlation
-CORR_Z_LOOKBACK = 200     # history of rolling corrs used for z-score
+CORR_PCT_LOOKBACK = 200   # history of rolling corrs for percentile rank (100=highest)
+CORR_Z_LOOKBACK = CORR_PCT_LOOKBACK  # legacy alias
 
 # ── Custom structures beyond the main CURVES/FLIES lists ──────────────────────
 # Same BBG mapping: 2s10s → USOS0210 Curncy. Merged into the live pull + panel.
