@@ -5,7 +5,7 @@
 | Prediction + email | `run_prediction.ipynb` (DataZone) or `python run_dz.py prediction --once` |
 | Explore | `python run_dz.py pipeline` |
 | Backtest | `python run_dz.py backtest` |
-| Structure cross-check | `python run_dz.py crosscheck` → `sofr_structures_crosscheck.xlsx` (python vs BBG `USOS####` / `UF######`) |
+| Structure cross-check | **`run_crosscheck.ipynb`** (DataZone) o `python run_dz.py crosscheck` → `sofr_structures_crosscheck.xlsx` |
 
 Knobs in `curve_config.py`:
 - `PREDICTION_EVERY_MINUTES` — loop/email cadence (default **30**)
