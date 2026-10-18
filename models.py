@@ -37,8 +37,8 @@ GRAPH_DIR_BACKTEST_VARS = getattr(_curve_cfg, "GRAPH_DIR_BACKTEST_VARS", "graphs
 log = logging.getLogger(__name__)
 COL_RZ = "residual/zscore"
 PREDICTION_COLS = [
-    "model", "structure", "features", "predicted_level", "time",
-    "y_pred_prev", "y_realized_prev", "residual_prev", "equation", "n_lookback",
+    "model", "structure", "features", "side", "predicted_level", "time",
+    "y_pred_prev", "y_realized_prev", "residuo", "residuo_std", "equation", "n_lookback",
 ]
 _SUMMARY_COLS = [
     "model", "structure", "features", "position_mode", "n_bars", "n_trades", "n_entries",
@@ -56,12 +56,30 @@ def _round3(x):
     return v if np.isnan(v) else round(v, 3)
 
 
+def _side_from_residuo(residuo):
+    """realized < predicted → PAY (red); realized > predicted → REC (green)."""
+    try:
+        r = float(residuo)
+    except (TypeError, ValueError):
+        return ""
+    if np.isnan(r) or abs(r) < 1e-12:
+        return ""
+    return "PAY" if r < 0 else "REC"
+
+
 def format_prediction_table(table):
     if table is None or table.empty:
         return table
     out = table.copy()
+    if "residuo" not in out.columns and "residual_prev" in out.columns:
+        out["residuo"] = out["residual_prev"]
+    if "side" not in out.columns and "residuo" in out.columns:
+        out["side"] = out["residuo"].map(_side_from_residuo)
     for c in list(out.columns):
-        if c in ("predicted_level", "y_pred_prev", "y_realized_prev", "residual_prev", "intercept") or str(c).startswith("beta_"):
+        if c in (
+            "predicted_level", "y_pred_prev", "y_realized_prev", "residuo",
+            "residuo_std", "residual_prev", "intercept",
+        ) or str(c).startswith("beta_"):
             out[c] = pd.to_numeric(out[c], errors="coerce").round(3)
     ordered = [c for c in PREDICTION_COLS if c in out.columns]
     return out[ordered + [c for c in out.columns if c not in ordered]]
@@ -306,6 +324,23 @@ def run_regressions(
     return results
 
 
+def _oos_residual_std(X, y, k, add_intercept=True, max_folds=None):
+    """Std of 1-step OOS residuals: train [t-k:t) → predict t, over recent folds."""
+    n = len(y)
+    if n <= k:
+        return _NAN
+    max_folds = int(max_folds or k)
+    t0 = max(k, n - max_folds)
+    resids = []
+    for t in range(t0, n):
+        beta = _fit(X[t - k:t], y[t - k:t], add_intercept)
+        yhat = float(_predict(X[t:t + 1], beta, add_intercept)[0])
+        resids.append(float(y[t]) - yhat)
+    if len(resids) < 2:
+        return _NAN
+    return _round3(float(np.std(resids, ddof=1)))
+
+
 def fit_predict_next(
     full_data, predicted_data, spec, train_size=TRAIN_SIZE, add_intercept=ADD_INTERCEPT,
 ):
@@ -319,12 +354,17 @@ def fit_predict_next(
     t_next = pd.Timestamp(t_prev) + pd.Timedelta(minutes=int(DATA_BAR_MINUTES))
     beta_now = _fit(X[n - k - 1:n - 1], y[n - k - 1:n - 1], add_intercept)
     beta_next = _fit(X[n - k:n], y[n - k:n], add_intercept)
-    y_pred_prev, y_realized_prev = _round3(_predict(x_last, beta_now, add_intercept)[0]), _round3(y[n - 1])
+    y_pred_prev = _round3(_predict(x_last, beta_now, add_intercept)[0])
+    y_realized_prev = _round3(y[n - 1])
+    residuo = _round3(y_realized_prev - y_pred_prev)
     row = {
         "model": spec.name, "structure": spec.target, "features": "+".join(spec.features),
+        "side": _side_from_residuo(residuo),
         "predicted_level": _round3(_predict(x_last, beta_next, add_intercept)[0]),
         "time": t_next, "y_pred_prev": y_pred_prev, "y_realized_prev": y_realized_prev,
-        "residual_prev": _round3(y_realized_prev - y_pred_prev),
+        "residuo": residuo,
+        "residuo_std": _oos_residual_std(X, y, k, add_intercept, max_folds=k),
+        "residual_prev": residuo,  # legacy alias
         "equation": equation_from_beta(spec.target, spec.features, beta_now, add_intercept),
         "n_lookback": k, "train_start": y_all.index[n - k - 1],
         "train_end": y_all.index[n - 2], "asof_prev": t_prev,
@@ -566,26 +606,34 @@ def format_prediction_html(table, asof="", graph_cids=None):
     """HTML body: header + colored table + optional inline CID images."""
     cols = [c for c in PREDICTION_COLS if c in table.columns]
     show = table[cols].copy() if cols else table.copy()
+    skip_num = {"model", "structure", "features", "equation", "time", "n_lookback", "side"}
     for c in show.columns:
-        if c in ("model", "structure", "features", "equation", "time", "n_lookback"):
+        if c in skip_num:
             continue
         show[c] = pd.to_numeric(show[c], errors="coerce")
 
-    def _cell(v):
+    def _cell(col, v):
         if v is None or (isinstance(v, float) and np.isnan(v)) or pd.isna(v):
-            return ""
-        if isinstance(v, (float, np.floating)):
-            return "%.3f" % float(v)
-        return str(v)
+            txt = ""
+        elif isinstance(v, (float, np.floating)):
+            txt = "%.3f" % float(v)
+        else:
+            txt = str(v)
+        extra = ""
+        if col == "side":
+            if txt == "PAY":
+                extra = "color:#c62828;font-weight:bold;"
+            elif txt == "REC":
+                extra = "color:#2e7d32;font-weight:bold;"
+        return (
+            '<td style="padding:6px 8px;border-bottom:1px solid #e6eaf0;font-size:12px;'
+            'font-family:Arial,sans-serif;white-space:nowrap;%s">%s</td>' % (extra, txt)
+        )
 
     rows_html = []
     for i, (_, row) in enumerate(show.iterrows()):
         bg = "#ffffff" if i % 2 == 0 else "#f4f7fb"
-        tds = "".join(
-            '<td style="padding:6px 8px;border-bottom:1px solid #e6eaf0;font-size:12px;'
-            'font-family:Arial,sans-serif;white-space:nowrap;">%s</td>' % _cell(row[c])
-            for c in show.columns
-        )
+        tds = "".join(_cell(c, row[c]) for c in show.columns)
         rows_html.append('<tr style="background:%s;">%s</tr>' % (bg, tds))
 
     th = "".join(
@@ -678,11 +726,15 @@ def append_zscore_latest(table, full_data):
             continue
         last, t_prev = panel.iloc[-1], panel.index[-1]
         t_next = pd.Timestamp(t_prev) + pd.Timedelta(minutes=int(DATA_BAR_MINUTES))
+        z50 = _round3(last["z_50"]) if "z_50" in last.index else _NAN
+        # z>0 → value above fair → REC; z<0 → PAY (same menor/mayor convention on z)
         row = {
             "model": res.spec.param, "structure": res.spec.series, "features": "",
+            "side": _side_from_residuo(z50),
             "predicted_level": _NAN, "time": t_next, "y_pred_prev": _NAN,
             "y_realized_prev": _round3(last["value"]),
-            "residual_prev": _round3(last["z_50"]) if "z_50" in last.index else _NAN,
+            "residuo": z50, "residuo_std": _NAN,
+            "residual_prev": z50,
             "equation": "", "n_lookback": "", "asof_prev": t_prev,
         }
         for c in z_cols:
