@@ -31,6 +31,22 @@ LAST_TEXT = ""
 LAST_HTML = ""
 LAST_GRAPH_PATHS = []
 
+
+def preview_email_html(html=None, inline_images=None):
+    """Replace cid:graphN with data-URI so Jupyter can render the email HTML."""
+    import base64
+
+    html = LAST_HTML if html is None else html
+    paths = LAST_GRAPH_PATHS if inline_images is None else list(inline_images or [])
+    out = html or ""
+    for i, p in enumerate(paths):
+        fp = Path(p)
+        if not fp.exists():
+            continue
+        b64 = base64.b64encode(fp.read_bytes()).decode("ascii")
+        out = out.replace("cid:graph%d" % i, "data:image/png;base64,%s" % b64)
+    return out
+
 SEND_EMAIL_ON_PREDICTION = getattr(_curve_cfg, "SEND_EMAIL_ON_PREDICTION", True)
 EMAIL_INLINE_GRAPHS = getattr(_curve_cfg, "EMAIL_INLINE_GRAPHS", True)
 GRAPH_LOOKBACK_DAYS = getattr(_curve_cfg, "GRAPH_LOOKBACK_DAYS", 9)
