@@ -25,6 +25,7 @@ USE_BBG_SWAP_STRUCTURES = getattr(_cfg, "USE_BBG_SWAP_STRUCTURES", True)
 BBG_CURVE_TICKER_PREFIX = getattr(_cfg, "BBG_CURVE_TICKER_PREFIX", "USOS")
 BBG_FLY_TICKER_PREFIX = getattr(_cfg, "BBG_FLY_TICKER_PREFIX", "UF")
 BBG_STRUCT_SUFFIX = getattr(_cfg, "BBG_STRUCT_SUFFIX", "Curncy")
+CROSS_ASSET = list(getattr(_cfg, "CROSS_ASSET", []))
 
 
 def drop_non_trading_days(df, holidays=None):
@@ -164,6 +165,9 @@ def generate_synthetic_sofr(tenors=None, n_bars=400, freq="3h", seed=42):
         cols = ["%s%d %s" % (BBG_PREFIX, t, BBG_SUFFIX) for t in (a, b, c)]
         if all(x in df.columns for x in cols):
             df[bbg_fly_ticker(a, b, c)] = (2.0 * df[cols[1]] - df[cols[0]] - df[cols[2]]) * 100.0
+    # Synthetic cross-assets
+    for clean, ticker in CROSS_ASSET:
+        df[ticker] = 100.0 + np.cumsum(rng.normal(0, 0.5, n_bars))
     df.index.name = "time"
     return df
 
@@ -252,6 +256,13 @@ def _parse(col, curves=None, flies=None):
     curve_names = {spec[0] for spec in (curves or CURVES)}
     fly_names = {spec[0] for spec in (flies or FLIES)}
     if s in curve_names or s in fly_names:
+        return s
+    # Cross-asset: map BBG ticker → clean name (and accept clean name as-is)
+    xa_by_ticker = {str(t).strip().lower(): n for n, t in CROSS_ASSET}
+    xa_names = {n for n, _ in CROSS_ASSET}
+    if s.lower() in xa_by_ticker:
+        return xa_by_ticker[s.lower()]
+    if s in xa_names:
         return s
     m = re.fullmatch(r"(\d+)\s*[Yy]?", s)
     return str(int(m.group(1))) if m else None
@@ -353,11 +364,13 @@ def build_full_data(
         m = _FWD_CLEAN_RE.fullmatch(n)
         return (int(m.group(2)), int(m.group(1)))
 
-    # Prefer BBG series; computed fills gaps only
+    xa_names = [n for n, _ in CROSS_ASSET if n in raw.columns]
+    # Prefer BBG series; computed fills gaps only; keep cross-assets for corr notebook
     pieces = (
         [raw[t].rename(t) for t in sorted(tenors, key=int)]
         + bbg_cur + cur + bbg_fly + fly
         + [raw[c].rename(c) for c in sorted(fwds, key=_fkey)] + fcur + ffly
+        + [raw[n].rename(n) for n in xa_names]
     )
     if not pieces:
         raise ValueError("No structures could be built — check raw tenors/forwards")
@@ -410,6 +423,7 @@ def _securities():
     )
     if USE_BBG_SWAP_STRUCTURES:
         secs = secs + structure_securities()
+    secs = secs + [t for _, t in CROSS_ASSET]
     return secs
 
 

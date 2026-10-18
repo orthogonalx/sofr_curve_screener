@@ -49,17 +49,32 @@ def main() -> None:
         res.path.to_csv(f"backtest_{name}.csv")
         s = res.summary
         print(
-            f"  {name}  trades={s['n_trades']}  "
-            f"pnl={s['total_pnl']:.4f}  hit={s['hit_rate']:.3f}  dd={s['max_dd']:.4f}",
+            "  %s  fit: oos_r2=%.3f rmse=%.3f  |  strat: trades=%s pnl=%.3f "
+            "hit=%.3f sharpe=%.2f pf=%.2f dd=%.3f"
+            % (
+                name,
+                s.get("oos_r2", float("nan")),
+                s.get("oos_rmse", float("nan")),
+                s.get("n_trades"),
+                s.get("total_pnl", float("nan")),
+                s.get("hit_rate", float("nan")),
+                s.get("sharpe", float("nan")),
+                s.get("profit_factor", float("nan")),
+                s.get("max_dd", float("nan")),
+            ),
             flush=True,
         )
         for p in save_backtest_plots(res):
             print(f"    wrote {p}", flush=True)
 
     summary = summary_table(results)
-    for c in ("total_pnl", "mean_pnl", "hit_rate", "max_dd"):
+    for c in (
+        "oos_r2", "oos_rmse", "oos_mae", "total_pnl", "mean_pnl",
+        "hit_rate", "profit_factor", "sharpe", "max_dd",
+    ):
         if c in summary.columns:
             summary[c] = summary[c].round(4)
+    print("\n=== scorecard (fit + strategy) ===", flush=True)
     print(summary.to_string(index=False), flush=True)
     Path("backtest_summary.csv").write_text(summary.to_csv(index=False))
 

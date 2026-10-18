@@ -167,6 +167,7 @@ GRAPH_LOOKBACK_DAYS = 9
 GRAPH_DIR_EVOLUTION = "graphs/evolution"
 GRAPH_DIR_BACKTEST_PNL = "graphs/backtest_pnl"
 GRAPH_DIR_BACKTEST_VARS = "graphs/backtest_vars"
+GRAPH_DIR_CORR = "graphs/correlations"
 BACKTEST_START = "2024-01-01"
 BACKTEST_END = None
 BACKTEST_RESIDUAL_THR_BP = 0.5
@@ -213,3 +214,19 @@ REPORT_TO: List[str] = []
 EMAIL_ENABLED = False
 EMAIL_INLINE_GRAPHS = True
 SEND_EMAIL_ON_PREDICTION = True
+
+# ── Cross-asset / correlation notebook ────────────────────────────────────────
+# Extra BBG series pulled into the live store (clean_name, bbg_ticker).
+CROSS_ASSET: List[Tuple[str, str]] = [
+    ("SPX", "SPX Index"),
+    ("CO1", "CO1 Comdty"),
+    ("DXY", "DXY Curncy"),
+    ("USGG10YR", "USGG10YR Index"),
+]
+# Columns for corr matrices (structures and/or CROSS_ASSET names). Edit freely.
+CORR_SERIES: List[str] = [
+    "5s7s10s", "10s20s30s", "10s15s30s", "3s4s5s", "10s30s",
+    "SPX", "CO1", "DXY", "USGG10YR",
+]
+CORR_WINDOW = 50          # rolling window for pairwise correlation
+CORR_Z_LOOKBACK = 200     # history of rolling corrs used for z-score
