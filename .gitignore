@@ -22,4 +22,6 @@ email_preview.html
 residual_report.csv
 residual_evolution*.png
 graphs/
+exports/correlations/corr_panel.csv
+exports/correlations/corr_panel.xlsx
 

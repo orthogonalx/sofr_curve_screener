@@ -168,6 +168,9 @@ GRAPH_DIR_EVOLUTION = "graphs/evolution"
 GRAPH_DIR_BACKTEST_PNL = "graphs/backtest_pnl"
 GRAPH_DIR_BACKTEST_VARS = "graphs/backtest_vars"
 GRAPH_DIR_CORR = "graphs/correlations"
+# Isolated panel for Excel rolling-corr charts (written by run_correlations)
+CORR_EXPORT_DIR = "exports/correlations"
+CORR_EXPORT_XLSX = "exports/correlations/corr_panel.xlsx"
 BACKTEST_START = "2024-01-01"
 BACKTEST_END = None
 BACKTEST_RESIDUAL_THR_BP = 0.5
