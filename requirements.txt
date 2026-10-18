@@ -1,4 +1,4 @@
 pandas
 numpy
 openpyxl
-# matplotlib   # optional — residual plots are skipped if missing
+matplotlib

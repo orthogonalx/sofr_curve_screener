@@ -185,6 +185,7 @@ def _bootstrap() -> None:
         ("numpy", ("1.21.2", "1.19.5", "1.18.5")),
         ("pandas", ("1.3.4", "1.1.5", "0.25.3")),
         ("openpyxl", ("3.0.9", "3.0.7")),
+        ("matplotlib", ("3.4.3", "3.3.4", "3.1.3", "prod", "latest")),
     ):
         _ensure_import(ms.version, name, vers)
 
