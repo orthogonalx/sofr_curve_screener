@@ -30,6 +30,10 @@ CORR_PCT_LOOKBACK = int(
 )
 GRAPH_DIR_CORR = getattr(_cfg, "GRAPH_DIR_CORR", "graphs/correlations")
 
+# Side outputs (so notebooks can keep `level, zmat, full = run_correlations()`)
+LAST_SCATTER_PATH = None
+LAST_SCATTER_DF = None
+
 
 def _available(panel: pd.DataFrame, series: Sequence[str]) -> List[str]:
     cols = [c for c in series if c in panel.columns]
@@ -192,6 +196,10 @@ def dual_corr_scatter_frame(
         if highlight_days is None else highlight_days
     )
     rcol = _resolve_rates_col(panel, rates)
+    # Fallback if CO1 not entitled / missing → SPX
+    if asset_x not in panel.columns and asset_x == "CO1" and "SPX" in panel.columns:
+        print("  [corr] scatter x: CO1 missing → using SPX", flush=True)
+        asset_x = "SPX"
     for c in (asset_x, asset_y):
         if c not in panel.columns:
             raise KeyError(
@@ -390,6 +398,7 @@ def run_correlations(
         vmax=100.0,
         fmt="%.0f",
     )
+    global LAST_SCATTER_PATH, LAST_SCATTER_DF
     scatter_path, scatter_df = None, None
     if make_scatter:
         try:
@@ -400,7 +409,9 @@ def run_correlations(
                 scatter_df.to_csv(dest / "corr_scatter_rates_assets.csv")
         except Exception as exc:  # noqa: BLE001
             print("  [corr] scatter skipped: %s" % exc, flush=True)
-    return level, pmat, full, scatter_path, scatter_df
+    LAST_SCATTER_PATH, LAST_SCATTER_DF = scatter_path, scatter_df
+    # Always 3 values so `level, zmat, full = run_correlations()` keeps working
+    return level, pmat, full
 
 
 def main(argv=None):
@@ -410,7 +421,7 @@ def main(argv=None):
     p.add_argument("--z-lookback", type=int, default=None, help="alias of --pct-lookback")
     p.add_argument("--no-scatter", action="store_true")
     args = p.parse_args(argv)
-    level, pmat, _, scatter_path, _ = run_correlations(
+    level, pmat, _ = run_correlations(
         corr_window=args.window,
         pct_lookback=args.pct_lookback,
         z_lookback=args.z_lookback,
@@ -420,8 +431,8 @@ def main(argv=None):
     print(level.round(3).to_string(), flush=True)
     print("\n=== corr percentile (100=highest) ===", flush=True)
     print(pmat.round(1).to_string(), flush=True)
-    if scatter_path:
-        print("\nscatter → %s" % scatter_path, flush=True)
+    if LAST_SCATTER_PATH:
+        print("\nscatter → %s" % LAST_SCATTER_PATH, flush=True)
 
 
 if __name__ == "__main__":
