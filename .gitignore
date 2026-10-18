@@ -16,6 +16,8 @@ backtest_residual_*.png
 backtest_pnl_*.png
 backtest_vars_*.png
 sofr_live.csv
+sofr_structures.csv
+email_preview.html
 residual_evolution*.png
 graphs/
 
