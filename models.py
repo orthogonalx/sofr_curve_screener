@@ -36,10 +36,16 @@ GRAPH_DIR_BACKTEST_PNL = getattr(_curve_cfg, "GRAPH_DIR_BACKTEST_PNL", "graphs/b
 GRAPH_DIR_BACKTEST_VARS = getattr(_curve_cfg, "GRAPH_DIR_BACKTEST_VARS", "graphs/backtest_vars")
 log = logging.getLogger(__name__)
 COL_RZ = "residual/zscore"
+# Three display blocks (HTML draws a vertical rule after each block break)
 PREDICTION_COLS = [
-    "model", "structure", "features", "side", "predicted_level", "time",
-    "y_pred_prev", "y_realized_prev", "residuo", "residuo_std", "equation", "n_lookback",
+    # signal / forecast
+    "model", "structure", "features", "side", "predicted_level", "residual", "residual_std",
+    # last bar realized vs pred
+    "y_pred_prev", "y_realized_prev", "time_last",
+    # fit meta
+    "equation", "n_periods",
 ]
+_PREDICTION_BLOCK_BREAKS = {"residual_std", "time_last"}  # thick right border after these
 _SUMMARY_COLS = [
     "model", "structure", "features", "position_mode", "n_bars", "n_trades", "n_entries",
     "n_long", "n_short", "n_flat", "total_pnl", "mean_pnl", "hit_rate", "max_dd",
@@ -56,10 +62,10 @@ def _round3(x):
     return v if np.isnan(v) else round(v, 3)
 
 
-def _side_from_residuo(residuo):
+def _side_from_residual(residual):
     """realized < predicted → PAY (red); realized > predicted → REC (green)."""
     try:
-        r = float(residuo)
+        r = float(residual)
     except (TypeError, ValueError):
         return ""
     if np.isnan(r) or abs(r) < 1e-12:
@@ -67,18 +73,45 @@ def _side_from_residuo(residuo):
     return "PAY" if r < 0 else "REC"
 
 
+def _n_periods_label(n_obs, bar_minutes=None):
+    """e.g. '160 obs (~20.0d @ 8/day)' from bar size."""
+    try:
+        n = int(n_obs)
+    except (TypeError, ValueError):
+        return "" if n_obs is None or n_obs == "" else str(n_obs)
+    bm = float(bar_minutes if bar_minutes is not None else DATA_BAR_MINUTES)
+    per_day = (24.0 * 60.0 / bm) if bm > 0 else _NAN
+    if np.isnan(per_day) or per_day <= 0:
+        return "%d obs" % n
+    days = n / per_day
+    return "%d obs (~%.1fd @ %g/day)" % (n, days, per_day)
+
+
 def format_prediction_table(table):
     if table is None or table.empty:
         return table
     out = table.copy()
-    if "residuo" not in out.columns and "residual_prev" in out.columns:
-        out["residuo"] = out["residual_prev"]
-    if "side" not in out.columns and "residuo" in out.columns:
-        out["side"] = out["residuo"].map(_side_from_residuo)
+    # legacy → current names
+    if "residual" not in out.columns:
+        for src in ("residuo", "residual_prev"):
+            if src in out.columns:
+                out["residual"] = out[src]
+                break
+    if "residual_std" not in out.columns and "residuo_std" in out.columns:
+        out["residual_std"] = out["residuo_std"]
+    if "time_last" not in out.columns:
+        for src in ("asof_prev", "time"):
+            if src in out.columns:
+                out["time_last"] = out[src]
+                break
+    if "n_periods" not in out.columns and "n_lookback" in out.columns:
+        out["n_periods"] = out["n_lookback"].map(_n_periods_label)
+    if "side" not in out.columns and "residual" in out.columns:
+        out["side"] = out["residual"].map(_side_from_residual)
     for c in list(out.columns):
         if c in (
-            "predicted_level", "y_pred_prev", "y_realized_prev", "residuo",
-            "residuo_std", "residual_prev", "intercept",
+            "predicted_level", "y_pred_prev", "y_realized_prev", "residual",
+            "residual_std", "residuo", "residuo_std", "residual_prev", "intercept",
         ) or str(c).startswith("beta_"):
             out[c] = pd.to_numeric(out[c], errors="coerce").round(3)
     ordered = [c for c in PREDICTION_COLS if c in out.columns]
@@ -356,18 +389,27 @@ def fit_predict_next(
     beta_next = _fit(X[n - k:n], y[n - k:n], add_intercept)
     y_pred_prev = _round3(_predict(x_last, beta_now, add_intercept)[0])
     y_realized_prev = _round3(y[n - 1])
-    residuo = _round3(y_realized_prev - y_pred_prev)
+    residual = _round3(y_realized_prev - y_pred_prev)
+    residual_std = _oos_residual_std(X, y, k, add_intercept, max_folds=k)
     row = {
         "model": spec.name, "structure": spec.target, "features": "+".join(spec.features),
-        "side": _side_from_residuo(residuo),
+        "side": _side_from_residual(residual),
         "predicted_level": _round3(_predict(x_last, beta_next, add_intercept)[0]),
-        "time": t_next, "y_pred_prev": y_pred_prev, "y_realized_prev": y_realized_prev,
-        "residuo": residuo,
-        "residuo_std": _oos_residual_std(X, y, k, add_intercept, max_folds=k),
-        "residual_prev": residuo,  # legacy alias
+        "residual": residual,
+        "residual_std": residual_std,
+        "y_pred_prev": y_pred_prev,
+        "y_realized_prev": y_realized_prev,
+        "time_last": t_prev,
         "equation": equation_from_beta(spec.target, spec.features, beta_now, add_intercept),
-        "n_lookback": k, "train_start": y_all.index[n - k - 1],
-        "train_end": y_all.index[n - 2], "asof_prev": t_prev,
+        "n_periods": _n_periods_label(k),
+        "n_lookback": k,  # legacy
+        "time": t_next,  # next-bar stamp (legacy)
+        "residuo": residual,
+        "residuo_std": residual_std,
+        "residual_prev": residual,
+        "train_start": y_all.index[n - k - 1],
+        "train_end": y_all.index[n - 2],
+        "asof_prev": t_prev,
     }
     row.update({kk: _round3(vv) for kk, vv in _coef_dict(spec.features, beta_now, add_intercept).items()})
     return row
@@ -606,11 +648,19 @@ def format_prediction_html(table, asof="", graph_cids=None):
     """HTML body: header + colored table + optional inline CID images."""
     cols = [c for c in PREDICTION_COLS if c in table.columns]
     show = table[cols].copy() if cols else table.copy()
-    skip_num = {"model", "structure", "features", "equation", "time", "n_lookback", "side"}
+    skip_num = {
+        "model", "structure", "features", "equation", "time", "time_last",
+        "n_lookback", "n_periods", "side",
+    }
     for c in show.columns:
         if c in skip_num:
             continue
         show[c] = pd.to_numeric(show[c], errors="coerce")
+
+    def _block_border(col):
+        if col in _PREDICTION_BLOCK_BREAKS:
+            return "border-right:3px solid #1f4e79;"
+        return ""
 
     def _cell(col, v):
         if v is None or (isinstance(v, float) and np.isnan(v)) or pd.isna(v):
@@ -619,12 +669,12 @@ def format_prediction_html(table, asof="", graph_cids=None):
             txt = "%.3f" % float(v)
         else:
             txt = str(v)
-        extra = ""
+        extra = _block_border(col)
         if col == "side":
             if txt == "PAY":
-                extra = "color:#c62828;font-weight:bold;"
+                extra += "color:#c62828;font-weight:bold;"
             elif txt == "REC":
-                extra = "color:#2e7d32;font-weight:bold;"
+                extra += "color:#2e7d32;font-weight:bold;"
         return (
             '<td style="padding:6px 8px;border-bottom:1px solid #e6eaf0;font-size:12px;'
             'font-family:Arial,sans-serif;white-space:nowrap;%s">%s</td>' % (extra, txt)
@@ -638,7 +688,8 @@ def format_prediction_html(table, asof="", graph_cids=None):
 
     th = "".join(
         '<th style="padding:8px;background:#1f4e79;color:#fff;font-size:12px;'
-        'font-family:Arial,sans-serif;text-align:left;border:none;">%s</th>' % c
+        'font-family:Arial,sans-serif;text-align:left;border:none;%s">%s</th>'
+        % (_block_border(c), c)
         for c in show.columns
     )
     table_html = (
@@ -727,15 +778,16 @@ def append_zscore_latest(table, full_data):
         last, t_prev = panel.iloc[-1], panel.index[-1]
         t_next = pd.Timestamp(t_prev) + pd.Timedelta(minutes=int(DATA_BAR_MINUTES))
         z50 = _round3(last["z_50"]) if "z_50" in last.index else _NAN
-        # z>0 → value above fair → REC; z<0 → PAY (same menor/mayor convention on z)
         row = {
             "model": res.spec.param, "structure": res.spec.series, "features": "",
-            "side": _side_from_residuo(z50),
-            "predicted_level": _NAN, "time": t_next, "y_pred_prev": _NAN,
-            "y_realized_prev": _round3(last["value"]),
-            "residuo": z50, "residuo_std": _NAN,
-            "residual_prev": z50,
-            "equation": "", "n_lookback": "", "asof_prev": t_prev,
+            "side": _side_from_residual(z50),
+            "predicted_level": _NAN,
+            "residual": z50, "residual_std": _NAN,
+            "y_pred_prev": _NAN, "y_realized_prev": _round3(last["value"]),
+            "time_last": t_prev,
+            "equation": "", "n_periods": "",
+            "n_lookback": "", "time": t_next, "asof_prev": t_prev,
+            "residuo": z50, "residuo_std": _NAN, "residual_prev": z50,
         }
         for c in z_cols:
             if c in last.index:
