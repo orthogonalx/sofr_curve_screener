@@ -45,8 +45,12 @@ PREDICTION_COLS = [
 ]
 _PREDICTION_BLOCK_BREAKS = {"residual_std", "time_last"}  # thick right border after these
 _SUMMARY_COLS = [
-    "model", "structure", "features", "position_mode", "n_bars", "n_trades", "n_entries",
-    "n_long", "n_short", "n_flat", "total_pnl", "mean_pnl", "hit_rate", "max_dd",
+    "model", "structure", "features",
+    # fit (walk-forward OOS)
+    "oos_r2", "oos_rmse", "oos_mae", "n_folds",
+    # strategy simulation
+    "position_mode", "n_bars", "n_trades", "n_long", "n_short", "n_flat",
+    "total_pnl", "mean_pnl", "hit_rate", "profit_factor", "sharpe", "max_dd",
 ]
 _SUMMARY_VIEW = ["model", "structure", "nivel", "predicted", COL_RZ, "equation", "time"]
 _NAN = float("nan")
@@ -471,14 +475,31 @@ def _run_strategy(preds, spec, residual_thr_bp, z_thr, z_lookback, position_mode
     n_long, n_short = int((pos == 1).sum()), int((pos == -1).sum())
     entries = int(((pos != 0) & (pos.shift(1).fillna(0) != pos)).sum())
     n_trades = n_long + n_short if mode == "one_bar" else entries
-    traded = path["pnl"].dropna()
+    # Only count bars where we were in a trade (lagged position ≠ 0)
+    active = path.loc[path["position_lag"].fillna(0.0) != 0.0, "pnl"].dropna()
+    wins = active[active > 0]
+    losses = active[active < 0]
+    std = float(active.std(ddof=1)) if len(active) > 1 else _NAN
+    mean_pnl = float(active.mean()) if len(active) else _NAN
+    sharpe = (mean_pnl / std) if (std and not np.isnan(std) and abs(std) > 1e-12) else _NAN
+    # annualize roughly from bar minutes (8 bars/day @ 180m → ~252*8)
+    bars_per_year = max((365.0 * 24.0 * 60.0) / float(DATA_BAR_MINUTES) * (5.0 / 7.0), 1.0)
+    if sharpe == sharpe:  # not NaN
+        sharpe = float(sharpe * np.sqrt(bars_per_year))
+    gross_loss = float((-losses).sum()) if len(losses) else 0.0
+    profit_factor = (
+        float(wins.sum() / gross_loss) if gross_loss > 1e-12
+        else (_NAN if len(wins) == 0 else float("inf"))
+    )
     summary = {
         "model": spec.name, "structure": spec.target, "features": "+".join(spec.features),
         "position_mode": mode, "n_bars": int(len(path)), "n_trades": n_trades,
         "n_entries": n_trades, "n_long": n_long, "n_short": n_short, "n_flat": int((pos == 0).sum()),
-        "total_pnl": float(traded.sum()) if len(traded) else _NAN,
-        "mean_pnl": float(traded.mean()) if len(traded) else _NAN,
-        "hit_rate": float((traded > 0).mean()) if len(traded) else _NAN,
+        "total_pnl": float(active.sum()) if len(active) else _NAN,
+        "mean_pnl": mean_pnl,
+        "hit_rate": float((active > 0).mean()) if len(active) else _NAN,
+        "profit_factor": profit_factor if profit_factor != float("inf") else _NAN,
+        "sharpe": sharpe,
         "max_dd": float((path["cum_pnl"] - path["cum_pnl"].cummax()).min()) if len(path) else _NAN,
     }
     return StrategyResult(spec=spec, path=path, summary=summary, position_mode=mode)
@@ -515,14 +536,27 @@ def backtest_chosen_models(
             continue
         preds = res.predictions.copy()
         preds.index.name = "time"
-        out[name] = _run_strategy(
+        strat = _run_strategy(
             preds, res.spec, residual_thr_bp, z_thr, z_lookback, position_mode, full_data
         )
+        # Attach walk-forward fit quality next to strategy metrics
+        ov = res.overall or {}
+        strat.summary.update({
+            "oos_r2": float(ov.get("r2", _NAN)),
+            "oos_rmse": float(ov.get("rmse", _NAN)),
+            "oos_mae": float(ov.get("mae", _NAN)),
+            "n_folds": int(ov.get("n_folds", 0)),
+        })
+        out[name] = strat
     return out
 
 
 def summary_table(results):
-    return pd.DataFrame([r.summary for r in results.values()])[_SUMMARY_COLS] if results else pd.DataFrame()
+    if not results:
+        return pd.DataFrame()
+    df = pd.DataFrame([r.summary for r in results.values()])
+    cols = [c for c in _SUMMARY_COLS if c in df.columns]
+    return df[cols + [c for c in df.columns if c not in cols]]
 
 
 def _plt():

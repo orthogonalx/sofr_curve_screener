@@ -4,9 +4,10 @@
 |------|---------|
 | Prediction | `run_prediction.ipynb` or `python run_dz.py prediction --once` |
 | Explore | `python run_dz.py pipeline` |
-| Backtest | `python run_dz.py backtest` |
+| Backtest | `python run_dz.py backtest` (OOS fit + residual strategy scorecard) |
 | Cross-check | `run_crosscheck.ipynb` or `python run_dz.py crosscheck` |
+| Correlations | `run_correlations.ipynb` or `python run_dz.py correlations` |
 
-Knobs in `curve_config.py`: `PREDICTION_EVERY_MINUTES`, `GRAPH_LOOKBACK_DAYS`, `USE_BBG_SWAP_STRUCTURES`, email `SMTP_*` / `REPORT_TO`.
+Knobs: `PREDICTION_EVERY_MINUTES`, `GRAPH_LOOKBACK_DAYS`, `USE_BBG_SWAP_STRUCTURES`, `CROSS_ASSET` / `CORR_SERIES`, email `SMTP_*`.
 
-CURVES/FLIES = BBG `USOS####` / `UF######`. Fwd curves/flies = built from `S0490FS`.
+CURVES/FLIES = BBG `USOS####` / `UF######`. Fwd flies = built. Cross-assets = `CROSS_ASSET`.
