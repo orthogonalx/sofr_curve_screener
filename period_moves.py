@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 import curve_config as _cfg
-from data import build_panel, load_panel
+from data import build_panel, ensure_series_in_live_store, load_panel
 
 DATA_BAR_MINUTES = float(getattr(_cfg, "DATA_BAR_MINUTES", 180))
 MOVE_OUTRIGHTS = list(getattr(_cfg, "MOVE_OUTRIGHTS", ["2", "5", "10", "30"]))
@@ -188,15 +188,15 @@ def run_period_moves(
     Build outrights + structures move tables between start and end.
     Outrights reported in bp (percent×100). Structures already in bp / BBG units.
     """
+    out_names = list(outrights if outrights is not None else MOVE_OUTRIGHTS)
+    st_want = list(structures if structures is not None else MOVE_STRUCTURES)
     if panel is None:
+        ensure_series_in_live_store(list(out_names) + list(st_want))
         data_raw, src = load_panel()
         _, panel, _ = build_panel(data_raw)
         print("  [moves] src=%s  n=%d  asof=%s" % (src, len(panel), panel.index[-1]), flush=True)
 
-    out_names = list(outrights if outrights is not None else MOVE_OUTRIGHTS)
-    st_names = _structures_with_ussfct(
-        panel, structures if structures is not None else MOVE_STRUCTURES
-    )
+    st_names = _structures_with_ussfct(panel, st_want)
 
     out_tbl, meta = period_move_table(panel, out_names, start, end, scale_to_bp=True)
     st_tbl, _ = period_move_table(panel, st_names, start, end, scale_to_bp=False)

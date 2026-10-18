@@ -21,7 +21,7 @@ import pandas as pd
 
 import curve_config as _cfg
 from curve_config import CORR_SERIES
-from data import build_panel, load_panel
+from data import build_panel, ensure_series_in_live_store, load_panel
 
 CORR_WINDOW = int(getattr(_cfg, "CORR_WINDOW", 50))
 # lookback of rolling corrs for the percentile rank (alias CORR_Z_LOOKBACK kept)
@@ -331,10 +331,32 @@ def run_correlations(
     z_lookback=None,  # alias
     out_dir=None,
     make_scatter=True,
+    ensure_missing=True,
 ):
+    cols = list(series or CORR_SERIES)
+    # Also ensure scatter legs exist when possible
+    for extra in (
+        getattr(_cfg, "CORR_SCATTER_RATES", None),
+        getattr(_cfg, "CORR_SCATTER_X", None),
+        getattr(_cfg, "CORR_SCATTER_Y", None),
+    ):
+        if extra and extra not in cols:
+            cols.append(extra)
+
+    if ensure_missing:
+        ensure_series_in_live_store(cols)
+
     data_raw, src = load_panel()
     _, full, _ = build_panel(data_raw)
     print("  [corr] src=%s  n=%d  asof=%s" % (src, len(full), full.index[-1]), flush=True)
+    present = [c for c in cols if c in full.columns]
+    missing = [c for c in cols if c not in full.columns]
+    if missing:
+        print(
+            "  [corr] still missing after ensure (not in live store / BBG): %s" % missing,
+            flush=True,
+        )
+    print("  [corr] using: %s" % present, flush=True)
 
     cw = int(CORR_WINDOW if corr_window is None else corr_window)
     if pct_lookback is not None:
@@ -343,10 +365,9 @@ def run_correlations(
         pl = int(z_lookback)
     else:
         pl = int(CORR_PCT_LOOKBACK)
-    cols = series or CORR_SERIES
 
-    level = corr_level_matrix(full, series=cols, window=cw)
-    pmat = corr_percentile_matrix(full, series=cols, corr_window=cw, pct_lookback=pl)
+    level = corr_level_matrix(full, series=present, window=cw)
+    pmat = corr_percentile_matrix(full, series=present, corr_window=cw, pct_lookback=pl)
 
     dest = Path(out_dir or GRAPH_DIR_CORR)
     dest.mkdir(parents=True, exist_ok=True)
