@@ -300,9 +300,10 @@ def build_full_data(
     """
     Build tenors + swap curves/flies + fwd structures.
 
-    prefer_bbg (default USE_BBG_SWAP_STRUCTURES): use BBG USOS/UF columns when
-    present; only compute missing ones from outrights.
-    force_compute: ignore BBG structure cols and always compute (cross-check).
+    prefer_bbg (default USE_BBG_SWAP_STRUCTURES): use BBG USOS/UF for CURVES/FLIES
+    when present; only compute missing swap structures from USOSFR outrights.
+    FWD_CURVES / FWD_FLIES are always computed from forward points (never BBG-listed).
+    force_compute: ignore BBG USOS/UF cols and always compute swap structs (cross-check).
     """
     raw = clean_raw_columns(data_raw) if clean else data_raw.copy()
     prefer_bbg = USE_BBG_SWAP_STRUCTURES if prefer_bbg is None else bool(prefer_bbg)

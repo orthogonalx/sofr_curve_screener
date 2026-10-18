@@ -94,13 +94,13 @@ def _expand_fwd_group_structures(
 
 FWD_CURVES, FWD_FLIES = _expand_fwd_group_structures(FWD_GROUPS)
 
-# ── Swap structures (BBG listed curves / flies) ────────────────────────────────
-# Live pull fetches Bloomberg structure tickers (not computed from outrights):
+# ── Swap structures (BBG listed curves / flies ONLY — not forwards) ────────────
+# Live pull fetches Bloomberg structure tickers for CURVES / FLIES:
 #   curve  XsYs   → USOS{X:02d}{Y:02d} Curncy     e.g. 5s10s → USOS0510 Curncy
 #   fly    XsYsZs → UF{X:02d}{Y:02d}{Z:02d} Curncy e.g. 5s7s10s → UF050710 Curncy
-# To add a curve / fly → append to CURVES / FLIES below (tickers follow automatically).
-# Fallback: if a BBG series is missing, build_full_data can still compute from
-# outrights (percent→bp): curve=(Y−X)*100, fly=(2Y−X−Z)*100.
+# Forward points (S0490FS …) are still pulled as outrights; FWD_CURVES / FWD_FLIES
+# are always BUILT in Python from those points — never pulled as listed BBG structs.
+# Fallback if a USOS/UF series is missing: compute from USOSFR outrights (*100 bp).
 USE_BBG_SWAP_STRUCTURES = True
 
 CurveSpec = Tuple[str, int, int]       # (name, short, long)
