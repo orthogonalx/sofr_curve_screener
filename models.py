@@ -712,9 +712,53 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
     )
     _style_obs_axis(ax, panel.index)
     _save(fig, str(out_dir / "evolution_structures.png"))
+
+    # One chart per CHOSEN model: target (left) vs feature(s) (right) → email HTML
+    for spec in specs:
+        y_col = spec.target if spec.target in panel.columns else None
+        x_cols = [f for f in spec.features if f in panel.columns]
+        if y_col is None and not x_cols:
+            continue
+        use_cols = ([y_col] if y_col else []) + x_cols
+        sub = _filter_trading_bars(panel[use_cols].dropna(how="all"))
+        if sub.empty:
+            continue
+        xx = _obs_x(sub.index)
+        fig, ax = plt.subplots(figsize=(5.4, 2.2))
+        handles, labels = [], []
+        if y_col is not None:
+            ln, = ax.plot(
+                xx, _y_with_gap_breaks(sub.index, sub[y_col].to_numpy(dtype=float)),
+                lw=1.2, color="C0", label=y_col,
+            )
+            handles.append(ln)
+            labels.append(y_col)
+            ax.set_ylabel(y_col, fontsize=8, color="C0")
+            ax.tick_params(axis="y", labelcolor="C0", labelsize=7)
+        ax.grid(True, alpha=0.3)
+        if x_cols:
+            ax2 = ax.twinx()
+            for i, c in enumerate(x_cols):
+                ln, = ax2.plot(
+                    xx, _y_with_gap_breaks(sub.index, sub[c].to_numpy(dtype=float)),
+                    lw=1.0, color="C%d" % (i + 1), label=c, alpha=0.9,
+                )
+                handles.append(ln)
+                labels.append(c)
+            ax2.set_ylabel(" / ".join(x_cols), fontsize=7, color="C1")
+            ax2.tick_params(axis="y", labelcolor="C1", labelsize=7)
+        ax.legend(handles, labels, loc="best", fontsize=6, frameon=False)
+        ax.set_title(
+            "%s  |  left=%s  right=%s"
+            % (spec.name, y_col or "—", "+".join(x_cols) if x_cols else "—"),
+            fontsize=8,
+        )
+        _style_obs_axis(ax, sub.index)
+        _save(fig, str(out_dir / ("evolution_%s.png" % spec.name)))
+
     print(
-        "  [graphs] evolution → %s  (lookback~%d days, bars=%d)"
-        % (out_dir, days, len(panel)),
+        "  [graphs] evolution → %s  (%d files, lookback~%d days, bars=%d)"
+        % (out_dir, len(written), days, len(panel)),
         flush=True,
     )
     return written
