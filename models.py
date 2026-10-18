@@ -601,18 +601,30 @@ def _slice_last_days(df, days, bar_minutes=None):
     return chunk
 
 
-def _style_time_axis(ax, plt):
-    """Few readable date ticks on x."""
-    import matplotlib.dates as mdates
+def _obs_x(index):
+    """Integer x positions = only bars that exist (skips weekends/holidays on the axis)."""
+    return np.arange(len(index), dtype=float)
 
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=3, maxticks=5))
-    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax.xaxis.get_major_locator()))
-    ax.tick_params(axis="x", labelsize=7, labelrotation=0)
+
+def _style_obs_axis(ax, index, n_ticks=5):
+    """Label observation axis with a few real timestamps (no empty calendar days)."""
+    n = len(index)
+    if n <= 0:
+        return
+    n_ticks = int(max(2, min(n_ticks, n)))
+    ticks = np.unique(np.linspace(0, n - 1, num=n_ticks, dtype=int))
+    labels = []
+    for i in ticks:
+        ts = pd.Timestamp(index[int(i)])
+        labels.append(ts.strftime("%m-%d %H:%M") if n_ticks <= 4 else ts.strftime("%m-%d"))
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(labels, fontsize=7)
+    ax.set_xlim(-0.5, n - 0.5)
     ax.tick_params(axis="y", labelsize=7)
 
 
 def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
-    """Plot CHOSEN structures; dual y-axis (target left, feature right); compact x ticks."""
+    """Plot CHOSEN structures; dual y-axis; x = trading bars only (no weekend flat)."""
     days = GRAPH_LOOKBACK_DAYS if days is None else int(days)
     specs = list(specs or CHOSEN_MODELS)
     out_dir = _ensure_dir(out_dir or GRAPH_DIR_EVOLUTION)
@@ -624,6 +636,7 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
     if panel is None or panel.empty:
         print("  skip evolution plots: empty panel", flush=True)
         return []
+    # Drop rows that are all-NaN on plotted cols later; keep index of real bars only
     written = []
     targets = []
     for spec in specs:
@@ -640,26 +653,31 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
         plt.close(fig)
         written.append(path)
 
+    x = _obs_x(panel.index)
+
     # Combined: first target(s) on left, rest on right if many
     fig, ax = plt.subplots(figsize=(5.8, 2.5))
     left_cols = targets[: max(1, (len(targets) + 1) // 2)]
     right_cols = [t for t in targets if t not in left_cols]
     for t in left_cols:
-        ax.plot(panel.index, panel[t], lw=1.0, label=t)
+        ax.plot(x, panel[t].to_numpy(dtype=float), lw=1.0, label=t)
     ax.set_ylabel("bp (left)", fontsize=8, color="C0")
     ax.grid(True, alpha=0.3)
     handles, labels = ax.get_legend_handles_labels()
     if right_cols:
         ax2 = ax.twinx()
         for i, t in enumerate(right_cols):
-            ax2.plot(panel.index, panel[t], lw=1.0, color="C%d" % ((i + 3) % 10), label=t)
+            ax2.plot(
+                x, panel[t].to_numpy(dtype=float), lw=1.0,
+                color="C%d" % ((i + 3) % 10), label=t,
+            )
         ax2.set_ylabel("bp (right)", fontsize=8, color="C3")
         ax2.tick_params(labelsize=7)
         h2, l2 = ax2.get_legend_handles_labels()
         handles, labels = handles + h2, labels + l2
     ax.legend(handles, labels, loc="best", fontsize=5, ncol=2, frameon=False)
-    ax.set_title("Structures — last ~%d days  (n=%d)" % (days, len(panel)), fontsize=9)
-    _style_time_axis(ax, plt)
+    ax.set_title("Structures — last ~%d days  (n=%d bars)" % (days, len(panel)), fontsize=9)
+    _style_obs_axis(ax, panel.index)
     _save(fig, str(out_dir / "evolution_structures.png"))
 
     # Per model: target on LEFT, feature(s) on RIGHT
@@ -668,10 +686,16 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
         x_cols = [f for f in spec.features if f in panel.columns]
         if y_col is None and not x_cols:
             continue
+        # Keep only rows with at least one plotted value (no empty bars)
+        use_cols = ([y_col] if y_col else []) + x_cols
+        sub = panel[use_cols].dropna(how="all")
+        if sub.empty:
+            continue
+        xx = _obs_x(sub.index)
         fig, ax = plt.subplots(figsize=(5.4, 2.2))
         handles, labels = [], []
         if y_col is not None:
-            ln, = ax.plot(panel.index, panel[y_col], lw=1.2, color="C0", label=y_col)
+            ln, = ax.plot(xx, sub[y_col].to_numpy(dtype=float), lw=1.2, color="C0", label=y_col)
             handles.append(ln); labels.append(y_col)
             ax.set_ylabel(y_col, fontsize=8, color="C0")
             ax.tick_params(axis="y", labelcolor="C0", labelsize=7)
@@ -680,7 +704,7 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
             ax2 = ax.twinx()
             for i, c in enumerate(x_cols):
                 ln, = ax2.plot(
-                    panel.index, panel[c], lw=1.0, color="C%d" % (i + 1),
+                    xx, sub[c].to_numpy(dtype=float), lw=1.0, color="C%d" % (i + 1),
                     label=c, alpha=0.9,
                 )
                 handles.append(ln); labels.append(c)
@@ -689,7 +713,7 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
         ax.legend(handles, labels, loc="best", fontsize=6, frameon=False)
         ax.set_title("%s  |  left=%s  right=%s" % (
             spec.name, y_col or "—", "+".join(x_cols) if x_cols else "—"), fontsize=8)
-        _style_time_axis(ax, plt)
+        _style_obs_axis(ax, sub.index)
         _save(fig, str(out_dir / ("evolution_%s.png" % spec.name)))
 
     print("  [graphs] evolution → %s  (%d files, lookback~%d days, points=%d)"
