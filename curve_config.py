@@ -327,7 +327,9 @@ BACKTEST_Z_LOOKBACK = 50            # past bars for residual μ/σ (no look-ahea
 BACKTEST_POSITION_MODE = "one_bar"  # "one_bar" | "hold"
 
 # ── Live store (updated by run_prediction refresh) ────────────────────────────
-LIVE_STORE_PATH = "sofr_live.csv"     # stacked panel on disk
+LIVE_STORE_PATH = "sofr_live.csv"     # raw BBG outrights / forwards on disk
+# Built panel: cleaned tenors + all curves/flies (2s5s, 5s7s10s, fwd flies, …)
+STRUCTURES_STORE_PATH = "sofr_structures.csv"
 # 100 days × 8 bars/day at 3h ≈ 800; +buffer for weekends/extra prints
 MAX_HISTORY_BARS = MAX_HISTORY_DAYS * (24 * 60 // BBG_INTERVAL_MINUTES) + 50
 

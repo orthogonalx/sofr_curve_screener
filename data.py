@@ -19,6 +19,8 @@ from curve_config import (
     LIVE_STORE_PATH, MAX_HISTORY_BARS, PREDICTED,
 )
 
+STRUCTURES_STORE_PATH = getattr(_cfg, "STRUCTURES_STORE_PATH", "sofr_structures.csv")
+
 BBGAPI_VERSION = getattr(_cfg, "BBGAPI_VERSION", "2022.09.26-2")
 BBGAPI_PATH = getattr(_cfg, "BBGAPI_PATH", "")
 _TENOR_RE = re.compile(r"^%s(\d+)\s*%s$" % (re.escape(BBG_PREFIX), re.escape(BBG_SUFFIX)), re.I)
@@ -87,6 +89,23 @@ def save_live_store(df, path=LIVE_STORE_PATH):
     out.index.name = "time"
     out.to_csv(path)
     return Path(path).resolve()
+
+
+def save_structures_store(full_data, path=None):
+    """
+    Persist built panel (tenors + curves/flies/fwd structures) next to sofr_live.csv.
+    Columns like 2, 5, 2s5s, 5s7s10s, 4y1y_5y1y_6y1y, …
+    """
+    dest = Path(path or STRUCTURES_STORE_PATH)
+    out = full_data.sort_index().copy()
+    out.index.name = "time"
+    out.to_csv(dest)
+    print(
+        "  [structures] wrote %s  n=%d  cols=%d  %s → %s"
+        % (dest, len(out), out.shape[1], out.index[0], out.index[-1]),
+        flush=True,
+    )
+    return dest.resolve()
 
 
 def append_snapshot(snapshot, path=LIVE_STORE_PATH, max_bars=MAX_HISTORY_BARS):
@@ -567,7 +586,15 @@ def load_panel():
     return generate_synthetic_sofr(n_bars=400, freq="%dmin" % int(DATA_BAR_MINUTES)), "synthetic"
 
 
-def build_panel(data_raw):
+def build_panel(data_raw, save_structures=True):
     if not isinstance(data_raw.index, pd.DatetimeIndex):
         raise TypeError("data_raw must be indexed by time")
-    return build_datasets(data_raw.apply(pd.to_numeric, errors="coerce").ffill())
+    cleaned, full, pred = build_datasets(
+        data_raw.apply(pd.to_numeric, errors="coerce").ffill()
+    )
+    if save_structures:
+        try:
+            save_structures_store(full)
+        except Exception as exc:  # noqa: BLE001
+            print("  [structures] save failed: %s" % exc, flush=True)
+    return cleaned, full, pred
