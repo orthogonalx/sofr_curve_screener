@@ -43,7 +43,7 @@ def parse_ts(text) -> pd.Timestamp:
         .replace("AM", " AM").replace("PM", " PM")
     )
     s = " ".join(s.split())
-    ts = pd.to_datetime(s, infer_datetime_format=True)
+    ts = pd.to_datetime(s)
     if not isinstance(ts, pd.Timestamp):
         ts = pd.Timestamp(ts)
     return ts.tz_localize(None) if ts.tzinfo is not None else ts
