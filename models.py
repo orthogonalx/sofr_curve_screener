@@ -602,25 +602,84 @@ def _slice_last_days(df, days, bar_minutes=None):
 
 
 def _obs_x(index):
-    """Integer x positions = only bars that exist (skips weekends/holidays on the axis)."""
+    """Integer x = only retained bars (evenly spaced; no calendar gaps)."""
     return np.arange(len(index), dtype=float)
 
 
+def _filter_trading_bars(df, bar_minutes=None):
+    """
+    Drop weekends and stale ffill rows after a long gap (holidays).
+    Keeps Mon–Fri sessions only so plots do not draw flat weekend spans.
+    """
+    if df is None or df.empty:
+        return df
+    bm = float(bar_minutes if bar_minutes is not None else DATA_BAR_MINUTES)
+    idx = pd.DatetimeIndex(df.index)
+    out = df.loc[idx.dayofweek < 5].copy()
+    if len(out) < 2:
+        return out
+    # Remove bars that are exact copies of the previous bar after a >1.5-bar gap
+    # (typical ffill across a holiday).
+    keep = np.ones(len(out), dtype=bool)
+    vals = out.to_numpy(dtype=float)
+    times = out.index
+    min_gap_h = (bm / 60.0) * 1.5
+    for i in range(1, len(out)):
+        gap_h = (times[i] - times[i - 1]).total_seconds() / 3600.0
+        if gap_h <= min_gap_h:
+            continue
+        a, b = vals[i - 1], vals[i]
+        if np.allclose(a, b, equal_nan=True):
+            keep[i] = False
+    trimmed = out.loc[keep]
+    # Walk forward again: also drop Sat/Sun already gone; drop any remaining
+    # weekday rows whose calendar date has zero unique movement vs prior day
+    # is unnecessary — weekday filter + stale-gap is enough.
+    if len(trimmed) < len(out):
+        print(
+            "  [graphs] dropped %d weekend/stale bars (%d → %d)"
+            % (len(out) - len(trimmed), len(df), len(trimmed)),
+            flush=True,
+        )
+    elif len(out) < len(df):
+        print(
+            "  [graphs] dropped weekends (%d → %d bars)" % (len(df), len(out)),
+            flush=True,
+        )
+    return trimmed
+
+
 def _style_obs_axis(ax, index, n_ticks=5):
-    """Label observation axis with a few real timestamps (no empty calendar days)."""
+    """Label observation axis with a few real timestamps (trading bars only)."""
     n = len(index)
     if n <= 0:
         return
     n_ticks = int(max(2, min(n_ticks, n)))
     ticks = np.unique(np.linspace(0, n - 1, num=n_ticks, dtype=int))
-    labels = []
-    for i in ticks:
-        ts = pd.Timestamp(index[int(i)])
-        labels.append(ts.strftime("%m-%d %H:%M") if n_ticks <= 4 else ts.strftime("%m-%d"))
-    ax.set_xticks(ticks)
-    ax.set_xticklabels(labels, fontsize=7)
+    labels = [pd.Timestamp(index[int(i)]).strftime("%m-%d\n%H:%M") for i in ticks]
+    ax.set_xticks(list(ticks))
+    ax.set_xticklabels(labels, fontsize=6)
     ax.set_xlim(-0.5, n - 0.5)
+    # Prevent matplotlib from treating x as dates
     ax.tick_params(axis="y", labelsize=7)
+
+
+def _y_with_gap_breaks(index, y, bar_minutes=None):
+    """
+    Insert NaNs where calendar gap between consecutive kept bars is huge
+    (should be rare after weekend drop; safety for odd holidays).
+    On an observation x-axis this only breaks the line — it does not add space.
+    """
+    y = np.asarray(y, dtype=float).copy()
+    if len(index) < 2:
+        return y
+    bm = float(bar_minutes if bar_minutes is not None else DATA_BAR_MINUTES)
+    # Only break if gap is multi-day (should not happen after filter; keep for safety)
+    lim = pd.Timedelta(days=2.5)
+    for i in range(1, len(index)):
+        if (index[i] - index[i - 1]) > lim:
+            y[i] = np.nan
+    return y
 
 
 def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
@@ -632,11 +691,10 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
     if plt is None:
         print("  skip evolution plots: matplotlib not installed", flush=True)
         return []
-    panel = _slice_last_days(full_data, days)
+    panel = _filter_trading_bars(_slice_last_days(full_data, days))
     if panel is None or panel.empty:
         print("  skip evolution plots: empty panel", flush=True)
         return []
-    # Drop rows that are all-NaN on plotted cols later; keep index of real bars only
     written = []
     targets = []
     for spec in specs:
@@ -660,7 +718,10 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
     left_cols = targets[: max(1, (len(targets) + 1) // 2)]
     right_cols = [t for t in targets if t not in left_cols]
     for t in left_cols:
-        ax.plot(x, panel[t].to_numpy(dtype=float), lw=1.0, label=t)
+        ax.plot(
+            x, _y_with_gap_breaks(panel.index, panel[t].to_numpy(dtype=float)),
+            lw=1.0, label=t,
+        )
     ax.set_ylabel("bp (left)", fontsize=8, color="C0")
     ax.grid(True, alpha=0.3)
     handles, labels = ax.get_legend_handles_labels()
@@ -668,15 +729,18 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
         ax2 = ax.twinx()
         for i, t in enumerate(right_cols):
             ax2.plot(
-                x, panel[t].to_numpy(dtype=float), lw=1.0,
-                color="C%d" % ((i + 3) % 10), label=t,
+                x, _y_with_gap_breaks(panel.index, panel[t].to_numpy(dtype=float)),
+                lw=1.0, color="C%d" % ((i + 3) % 10), label=t,
             )
         ax2.set_ylabel("bp (right)", fontsize=8, color="C3")
         ax2.tick_params(labelsize=7)
         h2, l2 = ax2.get_legend_handles_labels()
         handles, labels = handles + h2, labels + l2
     ax.legend(handles, labels, loc="best", fontsize=5, ncol=2, frameon=False)
-    ax.set_title("Structures — last ~%d days  (n=%d bars)" % (days, len(panel)), fontsize=9)
+    ax.set_title(
+        "Structures — last ~%d days  (n=%d trading bars)" % (days, len(panel)),
+        fontsize=9,
+    )
     _style_obs_axis(ax, panel.index)
     _save(fig, str(out_dir / "evolution_structures.png"))
 
@@ -686,16 +750,18 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
         x_cols = [f for f in spec.features if f in panel.columns]
         if y_col is None and not x_cols:
             continue
-        # Keep only rows with at least one plotted value (no empty bars)
         use_cols = ([y_col] if y_col else []) + x_cols
-        sub = panel[use_cols].dropna(how="all")
+        sub = _filter_trading_bars(panel[use_cols].dropna(how="all"))
         if sub.empty:
             continue
         xx = _obs_x(sub.index)
         fig, ax = plt.subplots(figsize=(5.4, 2.2))
         handles, labels = [], []
         if y_col is not None:
-            ln, = ax.plot(xx, sub[y_col].to_numpy(dtype=float), lw=1.2, color="C0", label=y_col)
+            ln, = ax.plot(
+                xx, _y_with_gap_breaks(sub.index, sub[y_col].to_numpy(dtype=float)),
+                lw=1.2, color="C0", label=y_col,
+            )
             handles.append(ln); labels.append(y_col)
             ax.set_ylabel(y_col, fontsize=8, color="C0")
             ax.tick_params(axis="y", labelcolor="C0", labelsize=7)
@@ -704,8 +770,8 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
             ax2 = ax.twinx()
             for i, c in enumerate(x_cols):
                 ln, = ax2.plot(
-                    xx, sub[c].to_numpy(dtype=float), lw=1.0, color="C%d" % (i + 1),
-                    label=c, alpha=0.9,
+                    xx, _y_with_gap_breaks(sub.index, sub[c].to_numpy(dtype=float)),
+                    lw=1.0, color="C%d" % (i + 1), label=c, alpha=0.9,
                 )
                 handles.append(ln); labels.append(c)
             ax2.set_ylabel(" / ".join(x_cols), fontsize=7, color="C1")
@@ -716,7 +782,7 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
         _style_obs_axis(ax, sub.index)
         _save(fig, str(out_dir / ("evolution_%s.png" % spec.name)))
 
-    print("  [graphs] evolution → %s  (%d files, lookback~%d days, points=%d)"
+    print("  [graphs] evolution → %s  (%d files, lookback~%d days, trading_bars=%d)"
           % (out_dir, len(written), days, len(panel)), flush=True)
     return written
 
