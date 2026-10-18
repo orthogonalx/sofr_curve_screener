@@ -215,18 +215,40 @@ EMAIL_ENABLED = False
 EMAIL_INLINE_GRAPHS = True
 SEND_EMAIL_ON_PREDICTION = True
 
-# ── Cross-asset / correlation notebook ────────────────────────────────────────
-# Extra BBG series pulled into the live store (clean_name, bbg_ticker).
+# ── Extra BBG series (pulled into live store; use clean name everywhere) ───────
+# Add any ticker not already in USOSFR / S0490FS / USOS / UF, e.g. futures, FX, equity.
+# (clean_name, bbg_ticker)
 CROSS_ASSET: List[Tuple[str, str]] = [
     ("SPX", "SPX Index"),
     ("CO1", "CO1 Comdty"),
     ("DXY", "DXY Curncy"),
     ("USGG10YR", "USGG10YR Index"),
+    ("SFRH7", "SFRH7 Comdty"),   # example SOFR future — used by CUSTOM_MODELS
 ]
-# Columns for corr matrices (structures and/or CROSS_ASSET names). Edit freely.
+
+# ── Correlation notebook: EDIT THIS LIST to choose matrix columns ─────────────
+# Names must exist in the panel: CURVES/FLIES/CUSTOM_* clean names, or CROSS_ASSET.
+# Example: add "2s5s", "5s10s", "2s10s", "SFRH7", …
 CORR_SERIES: List[str] = [
     "5s7s10s", "10s20s30s", "10s15s30s", "3s4s5s", "10s30s",
     "SPX", "CO1", "DXY", "USGG10YR",
 ]
 CORR_WINDOW = 50          # rolling window for pairwise correlation
 CORR_Z_LOOKBACK = 200     # history of rolling corrs used for z-score
+
+# ── Custom structures beyond the main CURVES/FLIES lists ──────────────────────
+# Same BBG mapping: 2s10s → USOS0210 Curncy. Merged into the live pull + panel.
+CUSTOM_CURVES: List[CurveSpec] = [
+    ("2s10s", 2, 10),
+]
+CUSTOM_FLIES: List[FlySpec] = [
+    # ("2s5s7s", 2, 5, 7),
+]
+
+# ── Custom prediction (run_custom_prediction / run_custom.ipynb) ───────────────
+# Same OLS next-bar forecast as prediction, but YOUR specs — not x7/x20/…
+# Target / features = clean names (structures or CROSS_ASSET). If missing in DB,
+# add to CUSTOM_CURVES / CUSTOM_FLIES / CROSS_ASSET and --pull-history.
+CUSTOM_MODELS: List[RegressionSpec] = [
+    RegressionSpec(target="2s10s", features=("SFRH7",), name="c_2s10s_sfrh7"),
+]
