@@ -566,29 +566,53 @@ def _ensure_dir(path):
 def _slice_last_days(df, days, bar_minutes=None):
     """
     Last `days` calendar days of rows.
-    If the window is sparse/gapped (<2 points) — common with synthetic stores —
-    fall back to ~days worth of bars using DATA_BAR_MINUTES.
+    Drops trailing orphan timestamps (huge gaps) then, if the calendar window
+    is still sparse, takes ~days worth of contiguous bars.
     """
     if df is None or df.empty:
         return df
     days = float(days)
-    end = pd.Timestamp(df.index[-1])
-    sl = df.loc[df.index >= end - pd.Timedelta(days=days)]
-    if len(sl) >= 2:
-        return sl
     bm = float(bar_minutes if bar_minutes is not None else DATA_BAR_MINUTES)
+    max_gap = pd.Timedelta(minutes=max(bm * 2.5, 1.0))
+    # Drop trailing orphans so a single far-future stamp doesn't empty the chart
+    work = df
+    while len(work) >= 2 and (work.index[-1] - work.index[-2]) > max_gap:
+        work = work.iloc[:-1]
+    end = pd.Timestamp(work.index[-1])
+    sl = work.loc[work.index >= end - pd.Timedelta(days=days)]
+    span_ok = len(sl) >= 2 and (sl.index[-1] - sl.index[0]).days <= days * 1.5 + 1
+    if span_ok:
+        return sl
     n_bars = max(int(round(days * (24.0 * 60.0 / max(bm, 1.0)))), 2)
-    n_bars = min(n_bars, len(df))
+    n_bars = min(n_bars, len(work))
+    # Contiguous run ending at last bar
+    i = len(work) - 1
+    j = i
+    while j > 0 and (work.index[j] - work.index[j - 1]) <= max_gap:
+        j -= 1
+        if i - j + 1 >= n_bars:
+            break
+    chunk = work.iloc[j:i + 1].iloc[-n_bars:]
     print(
-        "  [graphs] calendar window sparse (n=%d) → using last %d bars (~%g days @ %gm)"
-        % (len(sl), n_bars, days, bm),
+        "  [graphs] calendar window sparse → contiguous last %d bars (~%g days @ %gm)"
+        % (len(chunk), days, bm),
         flush=True,
     )
-    return df.iloc[-n_bars:]
+    return chunk
+
+
+def _style_time_axis(ax, plt):
+    """Few readable date ticks on x."""
+    import matplotlib.dates as mdates
+
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=3, maxticks=5))
+    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax.xaxis.get_major_locator()))
+    ax.tick_params(axis="x", labelsize=7, labelrotation=0)
+    ax.tick_params(axis="y", labelsize=7)
 
 
 def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
-    """Plot CHOSEN structures over lookback; small PNGs for email inline."""
+    """Plot CHOSEN structures; dual y-axis (target left, feature right); compact x ticks."""
     days = GRAPH_LOOKBACK_DAYS if days is None else int(days)
     specs = list(specs or CHOSEN_MODELS)
     out_dir = _ensure_dir(out_dir or GRAPH_DIR_EVOLUTION)
@@ -616,27 +640,56 @@ def save_evolution_plots(full_data, days=None, specs=None, out_dir=None):
         plt.close(fig)
         written.append(path)
 
-    # Combined (compact)
-    fig, ax = plt.subplots(figsize=(5.8, 2.4))
-    for t in targets:
+    # Combined: first target(s) on left, rest on right if many
+    fig, ax = plt.subplots(figsize=(5.8, 2.5))
+    left_cols = targets[: max(1, (len(targets) + 1) // 2)]
+    right_cols = [t for t in targets if t not in left_cols]
+    for t in left_cols:
         ax.plot(panel.index, panel[t], lw=1.0, label=t)
-    ax.set_title("Structures — last ~%d days  (n=%d)" % (days, len(panel)), fontsize=9)
-    ax.set_ylabel("bp", fontsize=8); ax.tick_params(labelsize=7)
+    ax.set_ylabel("bp (left)", fontsize=8, color="C0")
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="best", fontsize=6, ncol=2, frameon=False)
+    handles, labels = ax.get_legend_handles_labels()
+    if right_cols:
+        ax2 = ax.twinx()
+        for i, t in enumerate(right_cols):
+            ax2.plot(panel.index, panel[t], lw=1.0, color="C%d" % ((i + 3) % 10), label=t)
+        ax2.set_ylabel("bp (right)", fontsize=8, color="C3")
+        ax2.tick_params(labelsize=7)
+        h2, l2 = ax2.get_legend_handles_labels()
+        handles, labels = handles + h2, labels + l2
+    ax.legend(handles, labels, loc="best", fontsize=5, ncol=2, frameon=False)
+    ax.set_title("Structures — last ~%d days  (n=%d)" % (days, len(panel)), fontsize=9)
+    _style_time_axis(ax, plt)
     _save(fig, str(out_dir / "evolution_structures.png"))
 
+    # Per model: target on LEFT, feature(s) on RIGHT
     for spec in specs:
-        cols = [c for c in ([spec.target] + list(spec.features)) if c in panel.columns]
-        if not cols:
+        y_col = spec.target if spec.target in panel.columns else None
+        x_cols = [f for f in spec.features if f in panel.columns]
+        if y_col is None and not x_cols:
             continue
-        fig, ax = plt.subplots(figsize=(5.2, 2.0))
-        for c in cols:
-            ax.plot(panel.index, panel[c], lw=1.0, label=c)
-        ax.set_title("%s  (%s)" % (spec.name, spec.target), fontsize=9)
-        ax.set_ylabel("bp", fontsize=8); ax.tick_params(labelsize=7)
+        fig, ax = plt.subplots(figsize=(5.4, 2.2))
+        handles, labels = [], []
+        if y_col is not None:
+            ln, = ax.plot(panel.index, panel[y_col], lw=1.2, color="C0", label=y_col)
+            handles.append(ln); labels.append(y_col)
+            ax.set_ylabel(y_col, fontsize=8, color="C0")
+            ax.tick_params(axis="y", labelcolor="C0", labelsize=7)
         ax.grid(True, alpha=0.3)
-        ax.legend(loc="best", fontsize=6, frameon=False)
+        if x_cols:
+            ax2 = ax.twinx()
+            for i, c in enumerate(x_cols):
+                ln, = ax2.plot(
+                    panel.index, panel[c], lw=1.0, color="C%d" % (i + 1),
+                    label=c, alpha=0.9,
+                )
+                handles.append(ln); labels.append(c)
+            ax2.set_ylabel(" / ".join(x_cols), fontsize=7, color="C1")
+            ax2.tick_params(axis="y", labelcolor="C1", labelsize=7)
+        ax.legend(handles, labels, loc="best", fontsize=6, frameon=False)
+        ax.set_title("%s  |  left=%s  right=%s" % (
+            spec.name, y_col or "—", "+".join(x_cols) if x_cols else "—"), fontsize=8)
+        _style_time_axis(ax, plt)
         _save(fig, str(out_dir / ("evolution_%s.png" % spec.name)))
 
     print("  [graphs] evolution → %s  (%d files, lookback~%d days, points=%d)"
