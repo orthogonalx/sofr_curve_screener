@@ -88,6 +88,8 @@ _BBG_FLY_RE = re.compile(
     % (re.escape(BBG_FLY_TICKER_PREFIX), re.escape(BBG_STRUCT_SUFFIX)),
     re.I,
 )
+# SOFR vs FF basis: USSFCT05 Curncy → USSFCT05 (any tenor, not only CROSS_ASSET list)
+_USSFCT_RE = re.compile(r"^USSFCT(\d+)\s*Curncy$", re.I)
 _BQ = None
 _DT_FMT = "%Y-%m-%dT%H:%M:%S"
 _BBG_LOG_KEYS = ("bbg", "blp", "dz", "datazone", "activity", "kerberos", "ms.")
@@ -270,6 +272,12 @@ def _parse(col, curves=None, flies=None):
     fly_names = {spec[0] for spec in (flies or all_flies())}
     if s in curve_names or s in fly_names:
         return s
+    # USSFCT## Curncy (SOFR/FF) — always keep, even if not listed in CROSS_ASSET yet
+    m = _USSFCT_RE.match(s)
+    if m:
+        return "USSFCT%02d" % int(m.group(1)) if len(m.group(1)) <= 2 else "USSFCT%s" % m.group(1)
+    if re.fullmatch(r"USSFCT\d+", s, re.I):
+        return s.upper()
     # Cross-asset: map BBG ticker → clean name (and accept clean name as-is)
     xa_by_ticker = {str(t).strip().lower(): n for n, t in CROSS_ASSET}
     xa_names = {n for n, _ in CROSS_ASSET}
@@ -379,13 +387,23 @@ def build_full_data(
         m = _FWD_CLEAN_RE.fullmatch(n)
         return (int(m.group(2)), int(m.group(1)))
 
+    # Cross-assets + any USSFCT* / other extras already cleaned in raw
+    struct_names = set(curve_names) | set(fly_names)
     xa_names = [n for n, _ in CROSS_ASSET if n in raw.columns]
-    # Prefer BBG series; computed fills gaps only; keep cross-assets for corr notebook
+    ussfct = sorted(
+        c for c in raw.columns
+        if str(c).upper().startswith("USSFCT") and c not in xa_names
+    )
+    kept = set(tenors) | set(fwds) | struct_names | set(xa_names) | set(ussfct)
+    extras = [c for c in raw.columns if c not in kept]
+    # Prefer BBG series; computed fills gaps; keep cross-assets / USSFCT / extras
     pieces = (
         [raw[t].rename(t) for t in sorted(tenors, key=int)]
         + bbg_cur + cur + bbg_fly + fly
         + [raw[c].rename(c) for c in sorted(fwds, key=_fkey)] + fcur + ffly
         + [raw[n].rename(n) for n in xa_names]
+        + [raw[n].rename(n) for n in ussfct]
+        + [raw[n].rename(n) for n in extras]
     )
     if not pieces:
         raise ValueError("No structures could be built — check raw tenors/forwards")
