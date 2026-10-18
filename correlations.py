@@ -21,7 +21,13 @@ import pandas as pd
 
 import curve_config as _cfg
 from curve_config import CORR_SERIES
-from data import build_panel, ensure_series_in_live_store, load_panel
+from data import (
+    CROSS_ASSET,
+    build_panel,
+    ensure_series_in_live_store,
+    load_panel,
+    resolve_feature_name,
+)
 
 CORR_WINDOW = int(getattr(_cfg, "CORR_WINDOW", 50))
 # lookback of rolling corrs for the percentile rank (alias CORR_Z_LOOKBACK kept)
@@ -33,6 +39,19 @@ GRAPH_DIR_CORR = getattr(_cfg, "GRAPH_DIR_CORR", "graphs/correlations")
 # Side outputs (so notebooks can keep `level, zmat, full = run_correlations()`)
 LAST_SCATTER_PATH = None
 LAST_SCATTER_DF = None
+
+
+def _to_clean_name(name: str) -> str:
+    """
+    CORR_* lists must use clean names ('CL1'), not BBG tickers ('CL1 Comdty').
+    If someone pastes a full ticker, map it back via CROSS_ASSET / resolve.
+    """
+    s = str(name).strip()
+    xa_by_ticker = {str(t).strip().lower(): n for n, t in CROSS_ASSET}
+    if s.lower() in xa_by_ticker:
+        return xa_by_ticker[s.lower()]
+    resolved = resolve_feature_name(s)
+    return resolved if resolved else s
 
 
 def _available(panel: pd.DataFrame, series: Sequence[str]) -> List[str]:
@@ -187,18 +206,18 @@ def dual_corr_scatter_frame(
     Build scatter data: x = 100*ρ(rates, asset_x), y = 100*ρ(rates, asset_y).
     `recent` = True for bars in the last `highlight_days` calendar days.
     """
-    rates = rates or getattr(_cfg, "CORR_SCATTER_RATES", "USGG5YR")
-    asset_x = asset_x or getattr(_cfg, "CORR_SCATTER_X", "CO1")
-    asset_y = asset_y or getattr(_cfg, "CORR_SCATTER_Y", "ESA")
+    rates = _to_clean_name(rates or getattr(_cfg, "CORR_SCATTER_RATES", "USGG5YR"))
+    asset_x = _to_clean_name(asset_x or getattr(_cfg, "CORR_SCATTER_X", "CL1"))
+    asset_y = _to_clean_name(asset_y or getattr(_cfg, "CORR_SCATTER_Y", "ESA"))
     cw = int(CORR_WINDOW if corr_window is None else corr_window)
     days = int(
         getattr(_cfg, "CORR_SCATTER_HIGHLIGHT_DAYS", 4)
         if highlight_days is None else highlight_days
     )
     rcol = _resolve_rates_col(panel, rates)
-    # Fallback if CO1 not entitled / missing → SPX
-    if asset_x not in panel.columns and asset_x == "CO1" and "SPX" in panel.columns:
-        print("  [corr] scatter x: CO1 missing → using SPX", flush=True)
+    # Fallback if oil (CL1/CO1) not entitled / missing → SPX
+    if asset_x not in panel.columns and asset_x in ("CO1", "CL1") and "SPX" in panel.columns:
+        print("  [corr] scatter x: %s missing → using SPX" % asset_x, flush=True)
         asset_x = "SPX"
     for c in (asset_x, asset_y):
         if c not in panel.columns:
@@ -341,15 +360,24 @@ def run_correlations(
     make_scatter=True,
     ensure_missing=True,
 ):
-    cols = list(series or CORR_SERIES)
+    raw_cols = list(series or CORR_SERIES)
     # Also ensure scatter legs exist when possible
     for extra in (
         getattr(_cfg, "CORR_SCATTER_RATES", None),
         getattr(_cfg, "CORR_SCATTER_X", None),
         getattr(_cfg, "CORR_SCATTER_Y", None),
     ):
-        if extra and extra not in cols:
-            cols.append(extra)
+        if extra and extra not in raw_cols:
+            raw_cols.append(extra)
+
+    # Normalize "CL1 Comdty" → "CL1" so panel lookup matches cleaned columns
+    cols = []
+    for c in raw_cols:
+        clean = _to_clean_name(c)
+        if clean != c:
+            print("  [corr] rename %r → %r (use clean names in CORR_*)" % (c, clean), flush=True)
+        if clean not in cols:
+            cols.append(clean)
 
     if ensure_missing:
         ensure_series_in_live_store(cols)

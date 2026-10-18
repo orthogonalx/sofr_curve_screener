@@ -220,23 +220,26 @@ SEND_EMAIL_ON_PREDICTION = True
 # (clean_name, bbg_ticker)
 CROSS_ASSET: List[Tuple[str, str]] = [
     ("SPX", "SPX Index"),
-    ("CO1", "CO1 Comdty"),
+    ("CO1", "CO1 Comdty"),          # Brent
+    ("CL1", "CL1 Comdty"),          # WTI — use clean name "CL1" in CORR_* lists
     ("DXY", "DXY Curncy"),
     ("USGG5YR", "USGG5YR Index"),   # US 5y rates — corr scatter
     ("USGG10YR", "USGG10YR Index"),
+    ("USGG30YR", "USGG30YR Index"),
     ("ESA", "ESA Index"),           # Euro Stoxx futures — corr scatter
     ("SFRH7", "SFRH7 Comdty"),
+    ("SFRH8", "SFRH8 Comdty"),
     ("USSFCT05", "USSFCT05 Curncy"),  # SOFR vs Fed Funds 5y
     ("USSFCT10", "USSFCT10 Curncy"),
     ("USSFCT30", "USSFCT30 Curncy"),
 ]
 
 # ── Correlation notebook: EDIT THIS LIST to choose matrix columns ─────────────
-# Names must exist in the panel: CURVES/FLIES/CUSTOM_* clean names, or CROSS_ASSET.
-# Example: add "2s5s", "5s10s", "2s10s", "SFRH7", …
+# Use CLEAN names only (left side of CROSS_ASSET), NOT full BBG tickers.
+# ✅ "CL1"   ❌ "CL1 Comdty"
 CORR_SERIES: List[str] = [
     "5s7s10s", "10s20s30s", "10s15s30s", "3s4s5s", "10s30s",
-    "SPX", "CO1", "DXY", "USGG10YR",
+    "SPX", "CL1", "DXY", "USGG10YR",
     "USSFCT05", "USSFCT10", "USSFCT30",
 ]
 CORR_WINDOW = 50          # rolling window for pairwise correlation
@@ -245,7 +248,7 @@ CORR_Z_LOOKBACK = CORR_PCT_LOOKBACK  # legacy alias
 
 # Scatter: x = ρ(rates, asset_x), y = ρ(rates, asset_y); highlight last N calendar days
 CORR_SCATTER_RATES = "USGG5YR"   # fallback: "5" (USOSFR5) if missing
-CORR_SCATTER_X = "CO1"           # x-axis: corr(rates, CO1)
+CORR_SCATTER_X = "CL1"           # x-axis: corr(rates, CL1); clean name, not "CL1 Comdty"
 CORR_SCATTER_Y = "ESA"           # y-axis: corr(rates, ESA)
 CORR_SCATTER_HIGHLIGHT_DAYS = 4  # last week ≈ 4 trading days
 
