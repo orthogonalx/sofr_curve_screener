@@ -23,6 +23,7 @@ import curve_config as _cfg
 from curve_config import CORR_SERIES
 from data import (
     CROSS_ASSET,
+    bbg_ticker_for_name,
     build_panel,
     ensure_series_in_live_store,
     load_panel,
@@ -35,10 +36,15 @@ CORR_PCT_LOOKBACK = int(
     getattr(_cfg, "CORR_PCT_LOOKBACK", getattr(_cfg, "CORR_Z_LOOKBACK", 200))
 )
 GRAPH_DIR_CORR = getattr(_cfg, "GRAPH_DIR_CORR", "graphs/correlations")
+CORR_EXPORT_DIR = getattr(_cfg, "CORR_EXPORT_DIR", "exports/correlations")
+CORR_EXPORT_XLSX = getattr(
+    _cfg, "CORR_EXPORT_XLSX", "exports/correlations/corr_panel.xlsx"
+)
 
 # Side outputs (so notebooks can keep `level, zmat, full = run_correlations()`)
 LAST_SCATTER_PATH = None
 LAST_SCATTER_DF = None
+LAST_EXPORT_PATH = None
 
 
 def _to_clean_name(name: str) -> str:
@@ -52,6 +58,96 @@ def _to_clean_name(name: str) -> str:
         return xa_by_ticker[s.lower()]
     resolved = resolve_feature_name(s)
     return resolved if resolved else s
+
+
+def corr_series_columns(series=None) -> List[str]:
+    """Clean names for CORR_SERIES + scatter legs (deduped, order preserved)."""
+    raw = list(series or CORR_SERIES)
+    for extra in (
+        getattr(_cfg, "CORR_SCATTER_RATES", None),
+        getattr(_cfg, "CORR_SCATTER_X", None),
+        getattr(_cfg, "CORR_SCATTER_Y", None),
+    ):
+        if extra and extra not in raw:
+            raw.append(extra)
+    out: List[str] = []
+    for c in raw:
+        clean = _to_clean_name(c)
+        if clean not in out:
+            out.append(clean)
+    return out
+
+
+def export_corr_panel(
+    panel: pd.DataFrame,
+    series=None,
+    path=None,
+) -> Path:
+    """
+    Write an isolated Excel (levels + meta) for offline rolling-corr charts.
+
+    Default: exports/correlations/corr_panel.xlsx
+      - levels: datetime index × series (what you download to Excel)
+      - meta:   clean name → BBG ticker, n_obs, first/last
+    Also writes a CSV twin next to the xlsx.
+    """
+    cols = corr_series_columns(series)
+    present = [c for c in cols if c in panel.columns]
+    missing = [c for c in cols if c not in panel.columns]
+    if not present:
+        raise ValueError("No CORR series present in panel to export; missing=%s" % missing)
+
+    dest = Path(path or CORR_EXPORT_XLSX)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    levels = panel[present].copy()
+    levels.index = pd.DatetimeIndex(levels.index).tz_localize(None)
+    levels.index.name = "time"
+    levels = levels.sort_index()
+
+    meta_rows = []
+    for c in present:
+        s = levels[c].dropna()
+        meta_rows.append({
+            "clean_name": c,
+            "bbg_ticker": bbg_ticker_for_name(c) or "",
+            "n_obs": int(s.shape[0]),
+            "first": s.index[0] if len(s) else None,
+            "last": s.index[-1] if len(s) else None,
+            "in_CORR_SERIES": c in list(CORR_SERIES),
+        })
+    for c in missing:
+        meta_rows.append({
+            "clean_name": c,
+            "bbg_ticker": bbg_ticker_for_name(c) or "",
+            "n_obs": 0,
+            "first": None,
+            "last": None,
+            "in_CORR_SERIES": c in list(CORR_SERIES),
+        })
+    meta = pd.DataFrame(meta_rows)
+
+    csv_path = dest.with_suffix(".csv")
+    levels.to_csv(csv_path)
+
+    try:
+        with pd.ExcelWriter(str(dest), engine="openpyxl") as writer:
+            levels.to_excel(writer, sheet_name="levels")
+            meta.to_excel(writer, sheet_name="meta", index=False)
+        print(
+            "  [corr] export Excel → %s  (cols=%d  n=%d  missing=%s)"
+            % (dest.resolve(), len(present), len(levels), missing or "—"),
+            flush=True,
+        )
+    except ImportError:
+        print(
+            "  [corr] openpyxl missing → CSV only: %s" % csv_path.resolve(),
+            flush=True,
+        )
+        return csv_path.resolve()
+
+    print("  [corr] export CSV   → %s" % csv_path.resolve(), flush=True)
+    return dest.resolve()
 
 
 def _available(panel: pd.DataFrame, series: Sequence[str]) -> List[str]:
@@ -360,24 +456,7 @@ def run_correlations(
     make_scatter=True,
     ensure_missing=True,
 ):
-    raw_cols = list(series or CORR_SERIES)
-    # Also ensure scatter legs exist when possible
-    for extra in (
-        getattr(_cfg, "CORR_SCATTER_RATES", None),
-        getattr(_cfg, "CORR_SCATTER_X", None),
-        getattr(_cfg, "CORR_SCATTER_Y", None),
-    ):
-        if extra and extra not in raw_cols:
-            raw_cols.append(extra)
-
-    # Normalize "CL1 Comdty" → "CL1" so panel lookup matches cleaned columns
-    cols = []
-    for c in raw_cols:
-        clean = _to_clean_name(c)
-        if clean != c:
-            print("  [corr] rename %r → %r (use clean names in CORR_*)" % (c, clean), flush=True)
-        if clean not in cols:
-            cols.append(clean)
+    cols = corr_series_columns(series)
 
     if ensure_missing:
         ensure_series_in_live_store(cols)
@@ -426,7 +505,13 @@ def run_correlations(
         vmax=100.0,
         fmt="%.0f",
     )
-    global LAST_SCATTER_PATH, LAST_SCATTER_DF
+    global LAST_SCATTER_PATH, LAST_SCATTER_DF, LAST_EXPORT_PATH
+    try:
+        LAST_EXPORT_PATH = export_corr_panel(full, series=cols)
+    except Exception as exc:  # noqa: BLE001
+        LAST_EXPORT_PATH = None
+        print("  [corr] export skipped: %s" % exc, flush=True)
+
     scatter_path, scatter_df = None, None
     if make_scatter:
         try:
