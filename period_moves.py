@@ -166,6 +166,16 @@ def period_move_table(
     return df, meta
 
 
+def _structures_with_ussfct(panel: pd.DataFrame, base: Sequence[str]) -> List[str]:
+    """MOVE_STRUCTURES plus any USSFCT* columns present in the panel."""
+    names = list(base)
+    for c in panel.columns:
+        cu = str(c).upper()
+        if cu.startswith("USSFCT") and c not in names and cu not in {x.upper() for x in names}:
+            names.append(str(c))
+    return names
+
+
 def run_period_moves(
     start,
     end,
@@ -184,7 +194,9 @@ def run_period_moves(
         print("  [moves] src=%s  n=%d  asof=%s" % (src, len(panel), panel.index[-1]), flush=True)
 
     out_names = list(outrights if outrights is not None else MOVE_OUTRIGHTS)
-    st_names = list(structures if structures is not None else MOVE_STRUCTURES)
+    st_names = _structures_with_ussfct(
+        panel, structures if structures is not None else MOVE_STRUCTURES
+    )
 
     out_tbl, meta = period_move_table(panel, out_names, start, end, scale_to_bp=True)
     st_tbl, _ = period_move_table(panel, st_names, start, end, scale_to_bp=False)

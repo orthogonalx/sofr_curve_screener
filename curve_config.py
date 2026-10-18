@@ -237,6 +237,7 @@ CROSS_ASSET: List[Tuple[str, str]] = [
 CORR_SERIES: List[str] = [
     "5s7s10s", "10s20s30s", "10s15s30s", "3s4s5s", "10s30s",
     "SPX", "CO1", "DXY", "USGG10YR",
+    "USSFCT05", "USSFCT10", "USSFCT30",
 ]
 CORR_WINDOW = 50          # rolling window for pairwise correlation
 CORR_PCT_LOOKBACK = 200   # history of rolling corrs for percentile rank (100=highest)
