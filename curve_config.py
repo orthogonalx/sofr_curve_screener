@@ -222,8 +222,10 @@ CROSS_ASSET: List[Tuple[str, str]] = [
     ("SPX", "SPX Index"),
     ("CO1", "CO1 Comdty"),
     ("DXY", "DXY Curncy"),
+    ("USGG5YR", "USGG5YR Index"),   # US 5y rates — corr scatter
     ("USGG10YR", "USGG10YR Index"),
-    ("SFRH7", "SFRH7 Comdty"),   # example SOFR future — used by CUSTOM_MODELS
+    ("ESA", "ESA Index"),           # Euro Stoxx futures — corr scatter
+    ("SFRH7", "SFRH7 Comdty"),
 ]
 
 # ── Correlation notebook: EDIT THIS LIST to choose matrix columns ─────────────
@@ -236,6 +238,12 @@ CORR_SERIES: List[str] = [
 CORR_WINDOW = 50          # rolling window for pairwise correlation
 CORR_PCT_LOOKBACK = 200   # history of rolling corrs for percentile rank (100=highest)
 CORR_Z_LOOKBACK = CORR_PCT_LOOKBACK  # legacy alias
+
+# Scatter: x = ρ(rates, asset_x), y = ρ(rates, asset_y); highlight last N calendar days
+CORR_SCATTER_RATES = "USGG5YR"   # fallback: "5" (USOSFR5) if missing
+CORR_SCATTER_X = "CO1"           # x-axis: corr(rates, CO1)
+CORR_SCATTER_Y = "ESA"           # y-axis: corr(rates, ESA)
+CORR_SCATTER_HIGHLIGHT_DAYS = 4  # last week ≈ 4 trading days
 
 # ── Custom structures beyond the main CURVES/FLIES lists ──────────────────────
 # Same BBG mapping: 2s10s → USOS0210 Curncy. Merged into the live pull + panel.
