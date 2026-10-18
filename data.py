@@ -672,23 +672,157 @@ def _interval_minutes(freq=None):
     return int(BBG_INTERVAL_MINUTES)
 
 
+def _series_from_bars(df, security, time_col="time", value_col="close"):
+    if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+        return None
+    frame = df if isinstance(df, pd.DataFrame) else pd.DataFrame(df)
+    if time_col not in frame.columns or value_col not in frame.columns:
+        raise ValueError(
+            "bars(%s) expected %s/%s, got %s" % (security, time_col, value_col, list(frame.columns))
+        )
+    s = pd.to_numeric(frame.set_index(time_col)[value_col], errors="coerce").rename(security)
+    s.index = pd.DatetimeIndex(pd.to_datetime(s.index))
+    if s.index.tz is not None:
+        s.index = s.index.tz_convert("UTC").tz_localize(None)
+    s.index.name = "time"
+    return s.sort_index().dropna()
+
+
 def _bdib_close(bq, security, start, end, interval):
     _quiet_bbg_logs()
     bars = bq.bdib(
         security=security, event_type=BBG_EVENT_TYPE, interval=int(interval),
         start_datetime=start.strftime(_DT_FMT), end_datetime=end.strftime(_DT_FMT),
     )
-    if bars is None or (isinstance(bars, pd.DataFrame) and bars.empty):
+    return _series_from_bars(bars, security)
+
+
+def _is_entitlement_error(exc):
+    text = str(exc)
+    return (
+        "NOT_ENTITLED" in text
+        or "Entitlement" in text
+        or "entitlement" in text.lower()
+    )
+
+
+def _bdh_px_last(bq, security, start, end):
+    """
+    Daily PX_LAST via bdh — often entitled when intradaily bdib is NOT_ENTITLED
+    (common for CO1/CL1 Comdty on desk feeds).
+    """
+    if not hasattr(bq, "bdh"):
+        raise RuntimeError("BlpQuery has no .bdh — cannot fallback from bdib")
+    _quiet_bbg_logs()
+    start_s = pd.Timestamp(start).strftime("%Y-%m-%d")
+    end_s = pd.Timestamp(end).strftime("%Y-%m-%d")
+    # Try common bbgapi signatures
+    last_err = None
+    raw = None
+    attempts = [
+        lambda: bq.bdh(security, ["PX_LAST"], start_s, end_s),
+        lambda: bq.bdh([security], ["PX_LAST"], start_s, end_s),
+        lambda: bq.bdh(
+            securities=[security], fields=["PX_LAST"],
+            start_date=start_s, end_date=end_s,
+        ),
+        lambda: bq.bdh(
+            security=security, field="PX_LAST",
+            start_date=start_s, end_date=end_s,
+        ),
+    ]
+    for fn in attempts:
+        try:
+            raw = fn()
+            if raw is not None:
+                break
+        except TypeError as exc:
+            last_err = exc
+            continue
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            if _is_entitlement_error(exc):
+                raise
+            continue
+    if raw is None:
+        raise RuntimeError("bdh(%s) failed: %s" % (security, last_err))
+
+    if isinstance(raw, pd.Series):
+        s = pd.to_numeric(raw, errors="coerce").rename(security)
+        s.index = pd.DatetimeIndex(pd.to_datetime(s.index)).tz_localize(None)
+        s.index.name = "time"
+        return s.sort_index().dropna()
+
+    df = raw if isinstance(raw, pd.DataFrame) else pd.DataFrame(raw)
+    if df.empty:
         return None
-    df = bars if isinstance(bars, pd.DataFrame) else pd.DataFrame(bars)
-    if "time" not in df.columns or "close" not in df.columns:
-        raise ValueError("bdib(%s) expected time/close, got %s" % (security, list(df.columns)))
-    s = pd.to_numeric(df.set_index("time")["close"], errors="coerce").rename(security)
+
+    # Flatten MultiIndex columns if present
+    if isinstance(df.columns, pd.MultiIndex):
+        # prefer PX_LAST level / matching security
+        try:
+            if security in df.columns.get_level_values(0):
+                df = df[security]
+            elif "PX_LAST" in df.columns.get_level_values(-1):
+                df = df.xs("PX_LAST", axis=1, level=-1)
+        except Exception:  # noqa: BLE001
+            df.columns = ["_".join(str(x) for x in c if x is not None) for c in df.columns]
+
+    if isinstance(df, pd.Series):
+        s = pd.to_numeric(df, errors="coerce").rename(security)
+    else:
+        # date as index or column
+        if not isinstance(df.index, pd.DatetimeIndex):
+            for cand in ("date", "Date", "time", "TIME"):
+                if cand in df.columns:
+                    df = df.set_index(cand)
+                    break
+        val_col = None
+        for cand in ("PX_LAST", "close", "Close", security):
+            if cand in df.columns:
+                val_col = cand
+                break
+        if val_col is None and df.shape[1] == 1:
+            val_col = df.columns[0]
+        if val_col is None:
+            raise ValueError("bdh(%s) unexpected columns: %s" % (security, list(df.columns)))
+        s = pd.to_numeric(df[val_col], errors="coerce").rename(security)
+
     s.index = pd.DatetimeIndex(pd.to_datetime(s.index))
     if s.index.tz is not None:
-        s.index = s.index.tz_convert("UTC").tz_localize(None)
+        s.index = s.index.tz_localize(None)
     s.index.name = "time"
-    return s.sort_index()
+    return s.sort_index().dropna()
+
+
+def _fetch_one_security(bq, security, start, end, interval):
+    """bdib first; on NOT_ENTITLED / empty → daily bdh PX_LAST."""
+    try:
+        s = _bdib_close(bq, security, start, end, interval)
+        if s is not None and not s.empty:
+            return s, "bdib"
+        print("  [bdib] empty %s — trying daily bdh" % security, flush=True)
+    except Exception as exc:  # noqa: BLE001
+        if _is_entitlement_error(exc):
+            print(
+                "  [bdib] NOT_ENTITLED %s (intraday) — trying daily bdh PX_LAST" % security,
+                flush=True,
+            )
+        else:
+            print("  [bdib] skip %s: %s — trying daily bdh" % (security, exc), flush=True)
+    try:
+        s = _bdh_px_last(bq, security, start, end)
+        if s is not None and not s.empty:
+            print(
+                "  [bdh] %s OK  bars=%d  %s → %s (daily; will ffill into live grid)"
+                % (security, len(s), s.index[0].date(), s.index[-1].date()),
+                flush=True,
+            )
+            return s, "bdh"
+        print("  [bdh] empty %s" % security, flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print("  [bdh] skip %s: %s" % (security, exc), flush=True)
+    return None, None
 
 
 def _fetch_bdib_panel(start_date=None, end_date=None, freq=None, securities=None):
@@ -701,22 +835,21 @@ def _fetch_bdib_panel(start_date=None, end_date=None, freq=None, securities=None
         start, end, interval, BBG_EVENT_TYPE, len(names)), flush=True)
     series_list = []
     for i, sec in enumerate(names, 1):
-        try:
-            s = _bdib_close(bq, sec, start, end, interval)
-        except Exception as exc:
-            print("  [bdib] skip %s: %s" % (sec, exc), flush=True)
-            continue
+        s, src = _fetch_one_security(bq, sec, start, end, interval)
         if s is None or s.empty:
-            print("  [bdib] empty %s" % sec, flush=True)
             continue
         series_list.append(s)
         if i in (1, len(names)) or i % 10 == 0:
-            print("  [bdib] %d/%d  last=%s  bars=%d" % (i, len(names), sec, len(s)), flush=True)
+            print(
+                "  [pull] %d/%d  last=%s  bars=%d  via=%s"
+                % (i, len(names), sec, len(s), src or "?"),
+                flush=True,
+            )
     if not series_list:
-        raise ValueError("bdib returned no series for any security")
+        raise ValueError("bdib/bdh returned no series for any security")
     panel = pd.concat(series_list, axis=1).sort_index()
     panel.index.name = "time"
-    print("  [bdib] panel n=%d cols=%d  %s → %s" % (
+    print("  [pull] panel n=%d cols=%d  %s → %s" % (
         len(panel), panel.shape[1], panel.index[0], panel.index[-1]), flush=True)
     return panel
 
@@ -767,8 +900,9 @@ def bbg_ticker_for_name(name):
 
 def ensure_series_in_live_store(names, path=None):
     """
-    If clean names are missing from the live store, pull their BBG tickers via bdib
-    and merge. Returns the updated raw live panel.
+    If clean names are missing from the live store, pull their BBG tickers
+    (bdib intradaily, then bdh daily on NOT_ENTITLED) and merge.
+    Returns the updated raw live panel.
     """
     dest = path or LIVE_STORE_PATH
     existing = load_live_store(dest) if Path(dest).exists() else pd.DataFrame()
@@ -791,10 +925,14 @@ def ensure_series_in_live_store(names, path=None):
     try:
         extra = _fetch_bdib_panel(securities=tickers)
     except Exception as exc:  # noqa: BLE001
-        print("  [ensure] bdib failed: %s" % exc, flush=True)
+        print("  [ensure] pull failed: %s" % exc, flush=True)
         return existing
     if extra is None or extra.empty:
-        print("  [ensure] bdib returned empty for %s" % tickers, flush=True)
+        print(
+            "  [ensure] empty after bdib+bdh for %s "
+            "(desk may lack commodity entitlement entirely)" % tickers,
+            flush=True,
+        )
         return existing
     return append_snapshot(extra, path=dest)
 

@@ -330,11 +330,12 @@ def dual_corr_scatter_frame(
         raise ValueError("No overlapping rolling corrs for scatter (check window / data)")
     cutoff = pd.Timestamp(out.index[-1]).normalize() - pd.Timedelta(days=max(days - 1, 0))
     out["recent"] = pd.DatetimeIndex(out.index).normalize() >= cutoff
-    out.attrs["rates"] = rcol
-    out.attrs["asset_x"] = asset_x
-    out.attrs["asset_y"] = asset_y
-    out.attrs["corr_window"] = cw
-    out.attrs["highlight_days"] = days
+    # Avoid DataFrame.attrs (missing on pandas 0.25 desk builds)
+    out["__rates"] = rcol
+    out["__asset_x"] = asset_x
+    out["__asset_y"] = asset_y
+    out["__corr_window"] = cw
+    out["__highlight_days"] = days
     return out
 
 
@@ -367,11 +368,15 @@ def plot_dual_corr_scatter(
         corr_window=corr_window,
         highlight_days=highlight_days,
     )
-    rcol = frame.attrs["rates"]
-    ax_name = frame.attrs["asset_x"]
-    ay_name = frame.attrs["asset_y"]
-    cw = frame.attrs["corr_window"]
-    days = frame.attrs["highlight_days"]
+    rcol = str(frame["__rates"].iloc[0])
+    ax_name = str(frame["__asset_x"].iloc[0])
+    ay_name = str(frame["__asset_y"].iloc[0])
+    cw = int(frame["__corr_window"].iloc[0])
+    days = int(frame["__highlight_days"].iloc[0])
+    frame = frame.drop(
+        columns=["__rates", "__asset_x", "__asset_y", "__corr_window", "__highlight_days"],
+        errors="ignore",
+    )
 
     hist = frame.loc[~frame["recent"]]
     recent = frame.loc[frame["recent"]]
