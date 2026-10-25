@@ -12,6 +12,7 @@ This launcher re-execs under Python 3.7 when needed, then bootstraps packages.
   python run_dz.py pipeline
   python run_dz.py crosscheck          # python vs BBG USOS/UF structures → Excel
   python run_dz.py correlations        # corr matrix + percentile + Excel export
+  python run_dz.py pull --tickers USGG5YR,CL1 --start 20240101
   python run_dz.py custom --once --pull-history   # CUSTOM_MODELS prediction
   python run_dz.py moves --start "10/15/26 09:00" --end "10/16/26 12:00"
 """
@@ -288,6 +289,8 @@ def main(argv=None) -> None:
         "xcheck": "crosscheck.py",
         "correlations": "correlations.py",
         "corr": "correlations.py",
+        "pull": "pull_data.py",
+        "pull-data": "pull_data.py",
         "custom": "run_custom_prediction.py",
         "custom-prediction": "run_custom_prediction.py",
         "moves": "period_moves.py",
@@ -297,7 +300,7 @@ def main(argv=None) -> None:
     if script is None:
         print(
             "Unknown command %r. Use: prediction | backtest | pipeline | crosscheck | "
-            "correlations | custom | moves" % cmd
+            "correlations | pull | custom | moves" % cmd
         )
         raise SystemExit(2)
 

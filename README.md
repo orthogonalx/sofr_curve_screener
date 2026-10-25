@@ -16,11 +16,27 @@ Or open the matching `run_*.ipynb`.
 | `prediction --once` | Fit OLS models → next-bar forecast + z-scores + email (if on) |
 | `prediction --once --pull-history` | Same, but refresh full BBG history into live store first |
 | `pipeline` | Explore / one-shot panel + graphs |
-| `backtest` | OOS fit + residual strategy scorecard |
+| `backtest` | Legacy pipeline backtest (`CHOSEN_MODELS`) |
 | `crosscheck` | Python vs BBG listed curves/flies → Excel |
 | `correlations` | Level corr + percentile heatmap + scatter + Excel panel |
+| `pull --tickers A,B --start YYYYMMDD` | BBG panel only → `exports/panels/` |
 | `custom --once` | Your `CUSTOM_MODELS` prediction |
 | `moves --start "…" --end "…"` | Level change / std / z between two timestamps |
+
+## Pull data
+
+```bash
+python run_dz.py pull --tickers USGG5YR,CL1,ESA --start 20240101 --freq 180
+# or run_pull_data.ipynb  → edit START / END / FREQ_MIN / TICKERS / OUT
+```
+
+## Simple backtest
+
+`run_backtest.ipynb` — walk-forward OLS + residual z-entry.
+
+- `SOURCE = "live"` or `"csv"` (e.g. from pull)
+- `ENTRY_Z = 1.0` → enter when `|z| >= 1` (mean-reversion, 1-bar hold)
+- Outputs under `exports/backtest/`
 
 ## Correlations
 
