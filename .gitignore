@@ -24,6 +24,8 @@ residual_evolution*.png
 graphs/
 exports/correlations/corr_panel.csv
 exports/correlations/corr_panel.xlsx
-exports/panels/
-exports/backtest/
+exports/panels/*
+!exports/panels/README.md
+exports/backtest/*
+!exports/backtest/.gitkeep
 
