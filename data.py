@@ -706,93 +706,73 @@ def _is_entitlement_error(exc):
     )
 
 
+def _normalize_bdh_series(raw, security):
+    """Turn bdh return (Series / DataFrame / MultiIndex) into a clean PX series."""
+    if isinstance(raw, pd.Series):
+        s = pd.to_numeric(raw, errors="coerce").rename(security)
+    else:
+        df = raw if isinstance(raw, pd.DataFrame) else pd.DataFrame(raw)
+        if df.empty:
+            return None
+        if isinstance(df.columns, pd.MultiIndex):
+            try:
+                if security in df.columns.get_level_values(0):
+                    df = df[security]
+                elif "PX_LAST" in df.columns.get_level_values(-1):
+                    df = df.xs("PX_LAST", axis=1, level=-1)
+            except Exception:  # noqa: BLE001
+                df.columns = ["_".join(str(x) for x in c if x is not None) for c in df.columns]
+        if isinstance(df, pd.Series):
+            s = pd.to_numeric(df, errors="coerce").rename(security)
+        else:
+            if not isinstance(df.index, pd.DatetimeIndex):
+                for cand in ("date", "Date", "time", "TIME"):
+                    if cand in df.columns:
+                        df = df.set_index(cand)
+                        break
+            val_col = next(
+                (c for c in ("PX_LAST", "close", "Close", security) if c in df.columns),
+                df.columns[0] if df.shape[1] == 1 else None,
+            )
+            if val_col is None:
+                raise ValueError("bdh(%s) unexpected columns: %s" % (security, list(df.columns)))
+            s = pd.to_numeric(df[val_col], errors="coerce").rename(security)
+    s.index = pd.DatetimeIndex(pd.to_datetime(s.index))
+    if s.index.tz is not None:
+        s.index = s.index.tz_localize(None)
+    s.index.name = "time"
+    return s.sort_index().dropna()
+
+
 def _bdh_px_last(bq, security, start, end):
-    """
-    Daily PX_LAST via bdh — often entitled when intradaily bdib is NOT_ENTITLED
-    (common for CO1/CL1 Comdty on desk feeds).
-    """
+    """Daily PX_LAST — fallback when bdib is NOT_ENTITLED (e.g. CO1/CL1)."""
     if not hasattr(bq, "bdh"):
-        raise RuntimeError("BlpQuery has no .bdh — cannot fallback from bdib")
+        raise RuntimeError("BlpQuery has no .bdh")
     _quiet_bbg_logs()
     start_s = pd.Timestamp(start).strftime("%Y-%m-%d")
     end_s = pd.Timestamp(end).strftime("%Y-%m-%d")
-    # Try common bbgapi signatures
-    last_err = None
-    raw = None
-    attempts = [
+    last_err, raw = None, None
+    for fn in (
         lambda: bq.bdh(security, ["PX_LAST"], start_s, end_s),
         lambda: bq.bdh([security], ["PX_LAST"], start_s, end_s),
         lambda: bq.bdh(
             securities=[security], fields=["PX_LAST"],
             start_date=start_s, end_date=end_s,
         ),
-        lambda: bq.bdh(
-            security=security, field="PX_LAST",
-            start_date=start_s, end_date=end_s,
-        ),
-    ]
-    for fn in attempts:
+    ):
         try:
             raw = fn()
             if raw is not None:
                 break
         except TypeError as exc:
             last_err = exc
-            continue
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             if _is_entitlement_error(exc):
                 raise
-            continue
     if raw is None:
         raise RuntimeError("bdh(%s) failed: %s" % (security, last_err))
-
-    if isinstance(raw, pd.Series):
-        s = pd.to_numeric(raw, errors="coerce").rename(security)
-        s.index = pd.DatetimeIndex(pd.to_datetime(s.index)).tz_localize(None)
-        s.index.name = "time"
-        return s.sort_index().dropna()
-
-    df = raw if isinstance(raw, pd.DataFrame) else pd.DataFrame(raw)
-    if df.empty:
-        return None
-
-    # Flatten MultiIndex columns if present
-    if isinstance(df.columns, pd.MultiIndex):
-        # prefer PX_LAST level / matching security
-        try:
-            if security in df.columns.get_level_values(0):
-                df = df[security]
-            elif "PX_LAST" in df.columns.get_level_values(-1):
-                df = df.xs("PX_LAST", axis=1, level=-1)
-        except Exception:  # noqa: BLE001
-            df.columns = ["_".join(str(x) for x in c if x is not None) for c in df.columns]
-
-    if isinstance(df, pd.Series):
-        s = pd.to_numeric(df, errors="coerce").rename(security)
-    else:
-        # date as index or column
-        if not isinstance(df.index, pd.DatetimeIndex):
-            for cand in ("date", "Date", "time", "TIME"):
-                if cand in df.columns:
-                    df = df.set_index(cand)
-                    break
-        val_col = None
-        for cand in ("PX_LAST", "close", "Close", security):
-            if cand in df.columns:
-                val_col = cand
-                break
-        if val_col is None and df.shape[1] == 1:
-            val_col = df.columns[0]
-        if val_col is None:
-            raise ValueError("bdh(%s) unexpected columns: %s" % (security, list(df.columns)))
-        s = pd.to_numeric(df[val_col], errors="coerce").rename(security)
-
-    s.index = pd.DatetimeIndex(pd.to_datetime(s.index))
-    if s.index.tz is not None:
-        s.index = s.index.tz_localize(None)
-    s.index.name = "time"
-    return s.sort_index().dropna()
+    return _normalize_bdh_series(raw, security)
 
 
 def _fetch_one_security(bq, security, start, end, interval):

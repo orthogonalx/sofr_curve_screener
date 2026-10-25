@@ -11,7 +11,7 @@ This launcher re-execs under Python 3.7 when needed, then bootstraps packages.
   python run_dz.py backtest
   python run_dz.py pipeline
   python run_dz.py crosscheck          # python vs BBG USOS/UF structures → Excel
-  python run_dz.py correlations        # corr matrix + corr z-score heatmap
+  python run_dz.py correlations        # corr matrix + percentile + Excel export
   python run_dz.py custom --once --pull-history   # CUSTOM_MODELS prediction
   python run_dz.py moves --start "10/15/26 09:00" --end "10/16/26 12:00"
 """
