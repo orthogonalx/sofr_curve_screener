@@ -168,8 +168,6 @@ GRAPH_DIR_EVOLUTION = "graphs/evolution"
 GRAPH_DIR_BACKTEST_PNL = "graphs/backtest_pnl"
 GRAPH_DIR_BACKTEST_VARS = "graphs/backtest_vars"
 GRAPH_DIR_CORR = "graphs/correlations"
-# Isolated panel for Excel rolling-corr charts (written by run_correlations)
-CORR_EXPORT_DIR = "exports/correlations"
 CORR_EXPORT_XLSX = "exports/correlations/corr_panel.xlsx"
 BACKTEST_START = "2024-01-01"
 BACKTEST_END = None
@@ -221,39 +219,35 @@ SEND_EMAIL_ON_PREDICTION = True
 # ── Extra BBG series (pulled into live store; use clean name everywhere) ───────
 # Add any ticker not already in USOSFR / S0490FS / USOS / UF, e.g. futures, FX, equity.
 # (clean_name, bbg_ticker)
+# (clean_name, bbg_ticker) — use clean_name in CORR_SERIES / scatter / models
 CROSS_ASSET: List[Tuple[str, str]] = [
     ("SPX", "SPX Index"),
-    ("CO1", "CO1 Comdty"),          # Brent
-    ("CL1", "CL1 Comdty"),          # WTI — use clean name "CL1" in CORR_* lists
+    ("CO1", "CO1 Comdty"),
+    ("CL1", "CL1 Comdty"),
     ("DXY", "DXY Curncy"),
-    ("USGG5YR", "USGG5YR Index"),   # US 5y rates — corr scatter
+    ("USGG5YR", "USGG5YR Index"),
     ("USGG10YR", "USGG10YR Index"),
     ("USGG30YR", "USGG30YR Index"),
-    ("ESA", "ESA Index"),           # Euro Stoxx futures — corr scatter
+    ("ESA", "ESA Index"),
     ("SFRH7", "SFRH7 Comdty"),
     ("SFRH8", "SFRH8 Comdty"),
-    ("USSFCT05", "USSFCT05 Curncy"),  # SOFR vs Fed Funds 5y
+    ("USSFCT05", "USSFCT05 Curncy"),
     ("USSFCT10", "USSFCT10 Curncy"),
     ("USSFCT30", "USSFCT30 Curncy"),
 ]
 
-# ── Correlation notebook: EDIT THIS LIST to choose matrix columns ─────────────
-# Use CLEAN names only (left side of CROSS_ASSET), NOT full BBG tickers.
-# ✅ "CL1"   ❌ "CL1 Comdty"
+# Edit this list → matrix columns (clean names only: "CL1", not "CL1 Comdty")
 CORR_SERIES: List[str] = [
     "5s7s10s", "10s20s30s", "10s15s30s", "3s4s5s", "10s30s",
     "SPX", "CL1", "DXY", "USGG10YR",
     "USSFCT05", "USSFCT10", "USSFCT30",
 ]
-CORR_WINDOW = 50          # rolling window for pairwise correlation
-CORR_PCT_LOOKBACK = 200   # history of rolling corrs for percentile rank (100=highest)
-CORR_Z_LOOKBACK = CORR_PCT_LOOKBACK  # legacy alias
-
-# Scatter: x = ρ(rates, asset_x), y = ρ(rates, asset_y); highlight last N calendar days
-CORR_SCATTER_RATES = "USGG5YR"   # fallback: "5" (USOSFR5) if missing
-CORR_SCATTER_X = "CL1"           # x-axis: corr(rates, CL1); clean name, not "CL1 Comdty"
-CORR_SCATTER_Y = "ESA"           # y-axis: corr(rates, ESA)
-CORR_SCATTER_HIGHLIGHT_DAYS = 4  # last week ≈ 4 trading days
+CORR_WINDOW = 50
+CORR_PCT_LOOKBACK = 200
+CORR_SCATTER_RATES = "USGG5YR"
+CORR_SCATTER_X = "CL1"
+CORR_SCATTER_Y = "ESA"
+CORR_SCATTER_HIGHLIGHT_DAYS = 4
 
 # ── Custom structures beyond the main CURVES/FLIES lists ──────────────────────
 # Same BBG mapping: 2s10s → USOS0210 Curncy. Merged into the live pull + panel.
