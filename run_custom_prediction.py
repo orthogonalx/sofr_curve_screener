@@ -15,14 +15,14 @@ from typing import Optional
 
 import curve_config as _curve_cfg
 from curve_config import CUSTOM_MODELS, DATA_BAR_MINUTES, REFRESH_DATA_ON_REQUEST, TRAIN_SIZE
-from data import (
+from lib.data import (
     build_panel,
     build_predicted_data,
     load_panel,
     print_live_levels,
     refresh_live_store,
 )
-from models import (
+from lib.models import (
     PREDICTION_COLS,
     format_prediction_html,
     format_prediction_table,

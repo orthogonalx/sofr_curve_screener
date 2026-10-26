@@ -13,8 +13,8 @@ from curve_config import (
     CHOSEN_MODELS,
     TRAIN_SIZE,
 )
-from data import build_panel, load_panel
-from models import backtest_chosen_models, save_backtest_plots, summary_table
+from lib.data import build_panel, load_panel
+from lib.models import backtest_chosen_models, save_backtest_plots, summary_table
 
 
 def main() -> None:

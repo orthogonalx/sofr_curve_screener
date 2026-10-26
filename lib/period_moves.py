@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 import curve_config as _cfg
-from data import build_panel, ensure_series_in_live_store, load_panel
+from lib.data import build_panel, ensure_series_in_live_store, load_panel
 
 DATA_BAR_MINUTES = float(getattr(_cfg, "DATA_BAR_MINUTES", 180))
 MOVE_OUTRIGHTS = list(getattr(_cfg, "MOVE_OUTRIGHTS", ["2", "5", "10", "30"]))

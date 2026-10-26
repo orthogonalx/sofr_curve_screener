@@ -28,7 +28,7 @@ from curve_config import (
     CURVES,
     FLIES,
 )
-from data import (
+from lib.data import (
     _fetch_bdib_panel,
     bbg_curve_ticker,
     bbg_fly_ticker,

@@ -7,7 +7,7 @@ Minimal residual mean-reversion backtest.
   3. Enter when |z| >= ENTRY_Z  (long if z<0, short if z>0)
   4. Hold one bar; pnl = pos_{t-1} * Δy
 
-  python -c "from backtest_lab import run_simple_backtest; ..."
+  python -c "from lib.backtest_lab import run_simple_backtest; ..."
   # or run_backtest.ipynb
 """
 from __future__ import annotations
@@ -19,8 +19,8 @@ import numpy as np
 import pandas as pd
 
 from curve_config import DATA_BAR_MINUTES, TRAIN_SIZE, RegressionSpec
-from data import build_panel, load_panel
-from models import _rolling_z, rolling_ols
+from lib.data import build_panel, load_panel
+from lib.models import _rolling_z, rolling_ols
 
 PathLike = Union[str, Path]
 

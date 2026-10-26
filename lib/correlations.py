@@ -21,7 +21,7 @@ import pandas as pd
 
 import curve_config as _cfg
 from curve_config import CORR_SERIES
-from data import (
+from lib.data import (
     CROSS_ASSET,
     bbg_ticker_for_name,
     build_panel,

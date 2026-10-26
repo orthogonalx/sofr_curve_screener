@@ -24,7 +24,7 @@ from curve_config import (
     TRAIN_SIZE, ZSCORE_LOOKBACKS, ZSCORE_MODELS, ZSCORE_WINDOW, RegressionScreen,
     RegressionSpec, ZScoreSpec,
 )
-from data import drop_non_trading_days, resolve_feature_name
+from lib.data import drop_non_trading_days, resolve_feature_name
 
 EMAIL_INLINE_GRAPHS = getattr(_curve_cfg, "EMAIL_INLINE_GRAPHS", True)
 SMTP_USE_TLS = getattr(_curve_cfg, "SMTP_USE_TLS", True)
