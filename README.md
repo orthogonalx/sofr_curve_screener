@@ -31,8 +31,11 @@ Or open the matching `run_*.ipynb`.
 ## Pull data
 
 ```bash
+# intradaily
 python run_dz.py pull --tickers USGG5YR,CL1,ESA --start 20240101 --freq 180
-# or run_pull_data.ipynb  → edit START / END / FREQ_MIN / TICKERS / OUT
+# daily
+python run_dz.py pull --tickers USGG5YR,CL1,ESA --start 20240101 --freq 1d
+# or run_pull_data.ipynb  → FREQ = "1d"  or  180
 ```
 
 ## Simple backtest
