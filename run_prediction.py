@@ -15,8 +15,8 @@ from curve_config import (
     REFRESH_DATA_ON_REQUEST,
     TRAIN_SIZE,
 )
-from data import build_panel, load_panel, print_live_levels, refresh_live_store
-from models import (
+from lib.data import build_panel, load_panel, print_live_levels, refresh_live_store
+from lib.models import (
     PREDICTION_COLS,
     append_zscore_latest,
     format_prediction_html,

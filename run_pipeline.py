@@ -12,8 +12,8 @@ from curve_config import (
     ZSCORE_LOOKBACKS,
     ZSCORE_MODELS,
 )
-from data import build_panel, load_panel
-from models import (
+from lib.data import build_panel, load_panel
+from lib.models import (
     build_summary,
     equation_from_beta,
     format_summary_text,

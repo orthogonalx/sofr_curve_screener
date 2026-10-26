@@ -15,7 +15,7 @@ from typing import List, Optional, Sequence, Union
 
 import pandas as pd
 
-from data import (
+from lib.data import (
     BBG_INTERVAL_MINUTES,
     _fetch_bdib_panel,
     bbg_ticker_for_name,

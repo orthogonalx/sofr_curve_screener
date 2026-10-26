@@ -241,7 +241,7 @@ def _bootstrap() -> None:
 
     # Pre-load bbgapi here so failures are obvious before prediction starts
     try:
-        from data import _ensure_bbgapi
+        from lib.data import _ensure_bbgapi
 
         _ensure_bbgapi()
         import bbgapi  # noqa: F401
@@ -285,16 +285,16 @@ def main(argv=None) -> None:
         "backtest": "run_backtest.py",
         "pipeline": "run_pipeline.py",
         "explore": "run_pipeline.py",
-        "crosscheck": "crosscheck.py",
-        "xcheck": "crosscheck.py",
-        "correlations": "correlations.py",
-        "corr": "correlations.py",
-        "pull": "pull_data.py",
-        "pull-data": "pull_data.py",
+        "crosscheck": "lib/crosscheck.py",
+        "xcheck": "lib/crosscheck.py",
+        "correlations": "lib/correlations.py",
+        "corr": "lib/correlations.py",
+        "pull": "lib/pull_data.py",
+        "pull-data": "lib/pull_data.py",
         "custom": "run_custom_prediction.py",
         "custom-prediction": "run_custom_prediction.py",
-        "moves": "period_moves.py",
-        "period-moves": "period_moves.py",
+        "moves": "lib/period_moves.py",
+        "period-moves": "lib/period_moves.py",
     }
     script = mapping.get(cmd)
     if script is None:

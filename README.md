@@ -1,6 +1,11 @@
 # SOFR Curve Screener
 
-Live SOFR curve/fly screener on Bloomberg (`bdib` → `sofr_live.csv`). Structures from BBG `USOS`/`UF` (+ computed fwd flies). Run everything via DataZone:
+Live SOFR curve/fly screener on Bloomberg (`bdib` → `sofr_live.csv`). Structures from BBG `USOS`/`UF` (+ computed fwd flies).
+
+**Root** = only what you run (`run_*.py` / `run_*.ipynb` / `run_dz.py`) + `curve_config.py`.  
+**`lib/`** = helpers (`data`, `models`, correlations, pull, backtest lab, …).
+
+Run everything via DataZone:
 
 ```bash
 git pull origin main
