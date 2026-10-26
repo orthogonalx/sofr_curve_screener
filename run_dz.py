@@ -70,6 +70,17 @@ def _maybe_reexec_for_bbgapi() -> None:
     os.execv(py, [py, os.path.abspath(__file__)] + sys.argv[1:])
 
 
+def _site_ok_for_this_python(path):
+    """Reject ancient /ms/dist trees (e.g. matplotlib 0.87 / python2.4) on Py3."""
+    p = path.replace("\\", "/")
+    major = sys.version_info[0]
+    if major >= 3 and ("/python2." in p or "/lib/python2." in p):
+        return False
+    if major == 2 and "/python3." in p:
+        return False
+    return True
+
+
 def _discover_site(pkg_name):
     """Find site-packages dirs under /ms/dist that contain pkg_name."""
     tag = "python%d.%d" % (sys.version_info[0], sys.version_info[1])
@@ -79,7 +90,7 @@ def _discover_site(pkg_name):
         "/ms/dist/python/PROJ/%s/*/%s/site-packages" % (pkg_name, tag),
         "/ms/dist/datazone/PROJ/%s/*/lib/%s/site-packages" % (pkg_name, tag),
         "/ms/dist/datazone/PROJ/%s/*/exec/lib/%s/site-packages" % (pkg_name, tag),
-        # broader fallback (any py tag) if exact match missing
+        # broader fallback — still filtered by _site_ok_for_this_python
         "/ms/dist/python/PROJ/%s/*/lib/python*/site-packages" % pkg_name,
         "/ms/dist/python/PROJ/%s/*/exec/lib/python*/site-packages" % pkg_name,
         "/ms/dist/datazone/PROJ/%s/*/lib/python*/site-packages" % pkg_name,
@@ -87,21 +98,26 @@ def _discover_site(pkg_name):
     found = []
     for pat in patterns:
         for d in sorted(glob.glob(pat)):
-            # prefer exact interpreter tag
-            if ("/lib/%s/" % tag) not in d.replace("\\", "/") and "/python*/" not in pat:
-                pass
+            if not _site_ok_for_this_python(d):
+                continue
             marker = pkg_name.replace("-", "_") if "-" in pkg_name else pkg_name
             if os.path.isdir(os.path.join(d, marker)) or os.path.isdir(
                 os.path.join(d, pkg_name)
             ) or os.path.isfile(os.path.join(d, marker + ".py")):
                 if d not in found:
                     found.append(d)
-    # put exact-tag matches first
     exact, other = [], []
     needle = "/lib/%s/" % tag
     for d in found:
         (exact if needle in d.replace("\\", "/") else other).append(d)
     return exact + other
+
+
+def _purge_mod(mod_name):
+    """Drop module + submodules so a bad sys.path entry can be retried cleanly."""
+    doomed = [k for k in sys.modules if k == mod_name or k.startswith(mod_name + ".")]
+    for k in doomed:
+        del sys.modules[k]
 
 
 def _ensure_import(ms_version, mod_name, versions, kw=None, required=False, pkg_name=None):
@@ -137,20 +153,21 @@ def _ensure_import(ms_version, mod_name, versions, kw=None, required=False, pkg_
             print("  [dz] skip %s %s: %s" % (pkg, ver, exc), flush=True)
             continue
         try:
-            if mod_name in sys.modules:
-                del sys.modules[mod_name]
+            _purge_mod(mod_name)
             __import__(mod_name)
             print("  [dz] %s OK  v=%s" % (pkg, ver), flush=True)
             return True
-        except ImportError as exc:
+        except Exception as exc:  # noqa: BLE001 — ImportError OR SyntaxError (py2 wheels)
             print("  [dz] %s addpkg ok but import fail v=%s: %s" % (pkg, ver, exc), flush=True)
+            _purge_mod(mod_name)
 
     for site in _discover_site(pkg) + _discover_site(mod_name):
+        inserted = False
         if site not in sys.path:
             sys.path.insert(0, site)
+            inserted = True
         try:
-            if mod_name in sys.modules:
-                del sys.modules[mod_name]
+            _purge_mod(mod_name)
             mod = __import__(mod_name)
             print(
                 "  [dz] %s OK from %s  file=%s"
@@ -158,7 +175,14 @@ def _ensure_import(ms_version, mod_name, versions, kw=None, required=False, pkg_
                 flush=True,
             )
             return True
-        except ImportError:
+        except Exception as exc:  # noqa: BLE001
+            print("  [dz] skip site %s: %s" % (site, exc), flush=True)
+            _purge_mod(mod_name)
+            if inserted and site in sys.path:
+                try:
+                    sys.path.remove(site)
+                except ValueError:
+                    pass
             continue
 
     msg = "  [dz] could not import %s (tried %s)" % (pkg, ", ".join(ordered))
@@ -181,17 +205,20 @@ def _bootstrap() -> None:
         )
         raise SystemExit(2)
 
-    # Core scientific stack (best-effort versions)
+    # Core scientific stack (best-effort; matplotlib/openpyxl optional)
     for name, vers in (
         ("six", ("1.12.0", "1.16.0")),
         ("pytz", ("2022.1", "2021.3")),
         ("dateutil", ("2.8.0", "2.8.2")),
         ("numpy", ("1.21.2", "1.19.5", "1.18.5")),
         ("pandas", ("1.3.4", "1.1.5", "0.25.3")),
-        ("openpyxl", ("3.0.9", "3.0.7")),
-        ("matplotlib", ("3.4.3", "3.3.4", "3.1.3", "prod", "latest")),
     ):
         _ensure_import(ms.version, name, vers)
+    # Excel / plots — nice to have; never abort bootstrap if missing
+    _ensure_import(ms.version, "et_xmlfile", ("1.1.0", "1.0.1"))
+    _ensure_import(ms.version, "openpyxl", ("3.0.9", "3.0.7"))
+    _ensure_import(ms.version, "PIL", ("8.3.1", "7.2.0"), pkg_name="Pillow")
+    _ensure_import(ms.version, "matplotlib", ("3.4.3", "3.3.4", "3.1.3"))
 
     # requests/bbgapi stack — require the ones that usually break terminal runs
     _ensure_import(
