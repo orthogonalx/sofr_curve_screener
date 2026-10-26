@@ -750,36 +750,42 @@ def _bdh_px_last(bq, security, start, end):
         raise RuntimeError("BlpQuery has no .bdh")
     _quiet_bbg_logs()
     t0, t1 = pd.Timestamp(start), pd.Timestamp(end)
-    # Desk bbgapi often wants YYYYMMDD; some builds accept ISO. Try both.
-    date_pairs = [
-        (t0.strftime("%Y%m%d"), t1.strftime("%Y%m%d")),
-        (t0.strftime("%Y-%m-%d"), t1.strftime("%Y-%m-%d")),
+    # DataZone bbgapi parses dates with strptime('%Y%m%d') — never pass ISO dashes.
+    d0, d1 = t0.strftime("%Y%m%d"), t1.strftime("%Y%m%d")
+    attempts = [
+        lambda: bq.bdh(security, "PX_LAST", d0, d1),
+        lambda: bq.bdh(security, ["PX_LAST"], d0, d1),
+        lambda: bq.bdh([security], ["PX_LAST"], d0, d1),
+        lambda: bq.bdh([security], "PX_LAST", d0, d1),
+        lambda: bq.bdh(security, ["PX_LAST"], start=d0, end=d1),
+        lambda: bq.bdh([security], ["PX_LAST"], start_date=d0, end_date=d1),
+        lambda: bq.bdh(
+            securities=[security], fields=["PX_LAST"], start_date=d0, end_date=d1,
+        ),
     ]
-    last_err, raw = None, None
-    for start_s, end_s in date_pairs:
-        attempts = (
-            lambda s=start_s, e=end_s: bq.bdh(security, ["PX_LAST"], s, e),
-            lambda s=start_s, e=end_s: bq.bdh([security], ["PX_LAST"], s, e),
-            lambda s=start_s, e=end_s: bq.bdh(
-                securities=[security], fields=["PX_LAST"], start_date=s, end_date=e,
-            ),
-        )
-        for fn in attempts:
-            try:
-                raw = fn()
-                if raw is not None and not (isinstance(raw, pd.DataFrame) and raw.empty):
-                    return _normalize_bdh_series(raw, security)
-            except TypeError as exc:
-                last_err = exc
-            except ValueError as exc:
-                # e.g. time data '2026-10-01' does not match format '%Y%m%d'
-                last_err = exc
-                break  # try next date format
-            except Exception as exc:  # noqa: BLE001
-                last_err = exc
-                if _is_entitlement_error(exc):
-                    raise
-    raise RuntimeError("bdh(%s) failed: %s" % (security, last_err))
+    last_err = None
+    for fn in attempts:
+        try:
+            raw = fn()
+        except TypeError as exc:
+            last_err = exc
+            continue
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            if _is_entitlement_error(exc):
+                raise
+            # wrong date format / bad kwargs → try next signature
+            continue
+        if raw is None:
+            continue
+        if isinstance(raw, pd.DataFrame) and raw.empty:
+            continue
+        if isinstance(raw, pd.Series) and raw.empty:
+            continue
+        out = _normalize_bdh_series(raw, security)
+        if out is not None and not out.empty:
+            return out
+    raise RuntimeError("bdh(%s) failed [%s→%s]: %s" % (security, d0, d1, last_err))
 
 
 def _fetch_one_security(bq, security, start, end, interval):
