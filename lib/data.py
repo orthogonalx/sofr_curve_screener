@@ -749,30 +749,37 @@ def _bdh_px_last(bq, security, start, end):
     if not hasattr(bq, "bdh"):
         raise RuntimeError("BlpQuery has no .bdh")
     _quiet_bbg_logs()
-    start_s = pd.Timestamp(start).strftime("%Y-%m-%d")
-    end_s = pd.Timestamp(end).strftime("%Y-%m-%d")
+    t0, t1 = pd.Timestamp(start), pd.Timestamp(end)
+    # Desk bbgapi often wants YYYYMMDD; some builds accept ISO. Try both.
+    date_pairs = [
+        (t0.strftime("%Y%m%d"), t1.strftime("%Y%m%d")),
+        (t0.strftime("%Y-%m-%d"), t1.strftime("%Y-%m-%d")),
+    ]
     last_err, raw = None, None
-    for fn in (
-        lambda: bq.bdh(security, ["PX_LAST"], start_s, end_s),
-        lambda: bq.bdh([security], ["PX_LAST"], start_s, end_s),
-        lambda: bq.bdh(
-            securities=[security], fields=["PX_LAST"],
-            start_date=start_s, end_date=end_s,
-        ),
-    ):
-        try:
-            raw = fn()
-            if raw is not None:
-                break
-        except TypeError as exc:
-            last_err = exc
-        except Exception as exc:  # noqa: BLE001
-            last_err = exc
-            if _is_entitlement_error(exc):
-                raise
-    if raw is None:
-        raise RuntimeError("bdh(%s) failed: %s" % (security, last_err))
-    return _normalize_bdh_series(raw, security)
+    for start_s, end_s in date_pairs:
+        attempts = (
+            lambda s=start_s, e=end_s: bq.bdh(security, ["PX_LAST"], s, e),
+            lambda s=start_s, e=end_s: bq.bdh([security], ["PX_LAST"], s, e),
+            lambda s=start_s, e=end_s: bq.bdh(
+                securities=[security], fields=["PX_LAST"], start_date=s, end_date=e,
+            ),
+        )
+        for fn in attempts:
+            try:
+                raw = fn()
+                if raw is not None and not (isinstance(raw, pd.DataFrame) and raw.empty):
+                    return _normalize_bdh_series(raw, security)
+            except TypeError as exc:
+                last_err = exc
+            except ValueError as exc:
+                # e.g. time data '2026-10-01' does not match format '%Y%m%d'
+                last_err = exc
+                break  # try next date format
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                if _is_entitlement_error(exc):
+                    raise
+    raise RuntimeError("bdh(%s) failed: %s" % (security, last_err))
 
 
 def _fetch_one_security(bq, security, start, end, interval):
