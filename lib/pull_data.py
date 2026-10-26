@@ -55,6 +55,7 @@ def pull_series(
     end=None,
     freq_minutes: int = None,
     out_path: Optional[PanelPath] = None,
+    ffill: bool = True,
 ) -> pd.DataFrame:
     """
     Fetch tickers via bdib (bdh daily fallback on NOT_ENTITLED).
@@ -65,6 +66,7 @@ def pull_series(
     start, end : date-like; empty end → now
     freq_minutes : bar size (default BBG_INTERVAL_MINUTES = 180)
     out_path : if set, write CSV (and .xlsx if openpyxl available)
+    ffill : forward-fill sparse bars (different tickers / daily oil vs intradaily)
 
     Returns cleaned DataFrame (DatetimeIndex, clean column names).
     """
@@ -82,6 +84,8 @@ def pull_series(
     )
     panel = clean_raw_columns(raw)
     panel = panel.apply(pd.to_numeric, errors="coerce").sort_index()
+    if ffill:
+        panel = panel.ffill()
     panel.index.name = "time"
     print(
         "  [pull] n=%d  cols=%s  %s → %s"
