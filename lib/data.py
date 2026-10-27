@@ -446,7 +446,8 @@ def _quiet_bbg_logs():
     warnings.filterwarnings("ignore")
 
 
-def _securities():
+def _core_securities():
+    """SOFR outrights + fwds + listed USOS/UF — enough for CHOSEN_MODELS backtest."""
     tenors = set()
     for _, *legs in list(all_curves()) + list(all_flies()):
         tenors.update(legs)
@@ -456,8 +457,16 @@ def _securities():
     )
     if USE_BBG_SWAP_STRUCTURES:
         secs = secs + structure_securities()
-    secs = secs + [t for _, t in CROSS_ASSET]
-    # de-dupe preserving order
+    seen, out = set(), []
+    for s in secs:
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _securities():
+    secs = _core_securities() + [t for _, t in CROSS_ASSET]
     seen, out = set(), []
     for s in secs:
         if s not in seen:
@@ -857,15 +866,76 @@ def _fetch_latest():
     return panel.iloc[[-1]]
 
 
-def pull_history_into_store(path=None, start_date=None, end_date=None, freq=None):
+def pull_history_into_store(
+    path=None, start_date=None, end_date=None, freq=None, securities=None,
+):
     dest = path or LIVE_STORE_PATH
-    hist = _fetch_bdib_panel(start_date=start_date, end_date=end_date, freq=freq)
+    hist = _fetch_bdib_panel(
+        start_date=start_date, end_date=end_date, freq=freq, securities=securities,
+    )
     if hist.empty:
         raise ValueError("Bloomberg history pull returned no rows")
     save_live_store(hist, dest)
     print("  [history] wrote %s  n=%d  %s → %s" % (
         dest, len(hist), hist.index[0], hist.index[-1]), flush=True)
     return hist
+
+
+def update_live_store_to_now(
+    path=None, freq=None, core_only=True, lookback_days=14,
+):
+    """
+    Extend sofr_live.csv up to now without wiping it.
+
+    Pulls recent bars (from last_ts - lookback_days, or full BBG_START if empty)
+    for core SOFR securities by default (skips fragile CROSS_ASSET), then merges.
+    """
+    dest = Path(path or LIVE_STORE_PATH)
+    existing = load_live_store(dest) if dest.exists() else pd.DataFrame()
+    secs = _core_securities() if core_only else _securities()
+    if existing.empty:
+        start = None  # config BBG_START_DATE
+    else:
+        last = pd.Timestamp(existing.index.max())
+        start = (last - pd.Timedelta(days=int(lookback_days))).strftime("%Y%m%d")
+        print(
+            "  [history] merge update from %s (last store=%s)  n_sec=%d  core_only=%s"
+            % (start, last, len(secs), core_only),
+            flush=True,
+        )
+    try:
+        extra = _fetch_bdib_panel(
+            start_date=start, end_date=None, freq=freq, securities=secs,
+        )
+    except ValueError as exc:
+        print("  [history] BBG update failed: %s" % exc, flush=True)
+        if existing.empty:
+            raise
+        print(
+            "  [history] keeping existing store  %s → %s  n=%d"
+            % (existing.index[0], existing.index[-1], len(existing)),
+            flush=True,
+        )
+        return existing
+    if extra is None or extra.empty:
+        if existing.empty:
+            raise ValueError("BBG update returned empty")
+        return existing
+    if existing.empty:
+        save_live_store(extra, dest)
+        print(
+            "  [history] wrote %s  n=%d  %s → %s"
+            % (dest, len(extra), extra.index[0], extra.index[-1]),
+            flush=True,
+        )
+        return extra
+    combined = append_snapshot(extra, path=dest)
+    print(
+        "  [history] merged → %s  n=%d  %s → %s"
+        % (dest, len(combined), combined.index[0], combined.index[-1]),
+        flush=True,
+    )
+    return combined
 
 
 def bbg_ticker_for_name(name):

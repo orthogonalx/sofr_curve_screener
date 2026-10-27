@@ -20,7 +20,12 @@ from curve_config import (
     CHOSEN_MODELS,
     TRAIN_SIZE,
 )
-from lib.data import build_panel, load_panel, pull_history_into_store, refresh_live_store
+from lib.data import (
+    build_panel,
+    load_panel,
+    refresh_live_store,
+    update_live_store_to_now,
+)
 from lib.models import backtest_chosen_models, save_backtest_plots, summary_table
 
 
@@ -42,11 +47,11 @@ def main(argv=None) -> None:
     )
     p.add_argument(
         "--pull-history", action="store_true",
-        help="Re-download full BBG history into sofr_live.csv (up to now) before backtest",
+        help="Update sofr_live.csv to now (core SOFR tickers; merges into existing store)",
     )
     p.add_argument(
         "--refresh", action="store_true",
-        help="Append latest bar only (does NOT fill gaps if store is stale)",
+        help="Append latest bar only (does NOT fill multi-day gaps)",
     )
     args = p.parse_args(argv)
 
@@ -57,11 +62,18 @@ def main(argv=None) -> None:
     mode = (args.mode or BACKTEST_POSITION_MODE or "one_bar").strip().lower()
 
     if args.pull_history:
-        print("  [backtest] pulling full history → sofr_live.csv …", flush=True)
-        pull_history_into_store()
+        print("  [backtest] updating sofr_live.csv to now (core SOFR, merge) …", flush=True)
+        try:
+            update_live_store_to_now(core_only=True, lookback_days=21)
+        except Exception as exc:  # noqa: BLE001
+            print("  [backtest] update failed (%s) — using existing store" % exc, flush=True)
         data_raw, src = load_panel()
     elif args.refresh:
-        data_raw, src = refresh_live_store(force_history=False)
+        try:
+            data_raw, src = refresh_live_store(force_history=False)
+        except Exception as exc:  # noqa: BLE001
+            print("  [backtest] refresh failed (%s) — using existing store" % exc, flush=True)
+            data_raw, src = load_panel()
     else:
         data_raw, src = load_panel()
     _, full, pred = build_panel(data_raw)
