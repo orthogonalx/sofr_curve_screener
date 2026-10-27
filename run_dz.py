@@ -322,12 +322,14 @@ def main(argv=None) -> None:
         "custom-prediction": "run_custom_prediction.py",
         "moves": "lib/period_moves.py",
         "period-moves": "lib/period_moves.py",
+        "verify": "lib/backtest_verify.py",
+        "backtest-verify": "lib/backtest_verify.py",
     }
     script = mapping.get(cmd)
     if script is None:
         print(
             "Unknown command %r. Use: prediction | backtest | pipeline | crosscheck | "
-            "correlations | pull | custom | moves" % cmd
+            "correlations | pull | custom | moves | verify" % cmd
         )
         raise SystemExit(2)
 
