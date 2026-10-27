@@ -13,6 +13,7 @@ This launcher re-execs under Python 3.7 when needed, then bootstraps packages.
   python run_dz.py crosscheck          # python vs BBG USOS/UF structures → Excel
   python run_dz.py correlations        # corr matrix + percentile + Excel export
   python run_dz.py pull --tickers USGG5YR,CL1 --start 20240101
+  python run_dz.py report              # refresh 180m + backtest + text report
   python run_dz.py custom --once --pull-history   # CUSTOM_MODELS prediction
   python run_dz.py moves --start "10/15/26 09:00" --end "10/16/26 12:00"
 """
@@ -324,12 +325,14 @@ def main(argv=None) -> None:
         "period-moves": "lib/period_moves.py",
         "verify": "lib/backtest_verify.py",
         "backtest-verify": "lib/backtest_verify.py",
+        "report": "lib/backtest_report.py",
+        "backtest-report": "lib/backtest_report.py",
     }
     script = mapping.get(cmd)
     if script is None:
         print(
             "Unknown command %r. Use: prediction | backtest | pipeline | crosscheck | "
-            "correlations | pull | custom | moves | verify" % cmd
+            "correlations | pull | custom | moves | verify | report" % cmd
         )
         raise SystemExit(2)
 

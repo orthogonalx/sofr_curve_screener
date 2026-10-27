@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
-"""Backtest residual mean-reversion on CHOSEN_MODELS."""
+"""Backtest residual mean-reversion on CHOSEN_MODELS.
 
+  python run_dz.py backtest
+  python run_dz.py backtest --z-thr 0 --residual-thr 0
+"""
+
+from __future__ import annotations
+
+import argparse
 from pathlib import Path
 
 from curve_config import (
@@ -17,15 +24,39 @@ from lib.data import build_panel, load_panel
 from lib.models import backtest_chosen_models, save_backtest_plots, summary_table
 
 
-def main() -> None:
-    mode = (BACKTEST_POSITION_MODE or "one_bar").strip().lower()
+def main(argv=None) -> None:
+    p = argparse.ArgumentParser(description="Backtest CHOSEN_MODELS")
+    p.add_argument(
+        "--z-thr", type=float, default=None,
+        help="|z| entry threshold (default: BACKTEST_ZSCORE_THR from config)",
+    )
+    p.add_argument(
+        "--residual-thr", type=float, default=None,
+        help="|residual| min bp (default: BACKTEST_RESIDUAL_THR_BP)",
+    )
+    p.add_argument("--start", default=None, help="Backtest start (default: config)")
+    p.add_argument("--end", default=None, help="Backtest end (default: config / None)")
+    p.add_argument(
+        "--mode", default=None,
+        help="Position mode: one_bar | hold (default: config)",
+    )
+    args = p.parse_args(argv)
+
+    z_thr = float(BACKTEST_ZSCORE_THR if args.z_thr is None else args.z_thr)
+    r_thr = float(BACKTEST_RESIDUAL_THR_BP if args.residual_thr is None else args.residual_thr)
+    start = BACKTEST_START if args.start is None else args.start
+    end = BACKTEST_END if args.end is None else args.end
+    mode = (args.mode or BACKTEST_POSITION_MODE or "one_bar").strip().lower()
+
     data_raw, src = load_panel()
     _, full, pred = build_panel(data_raw)
     print(
-        f"backtest  src={src}  n={len(data_raw)}  asof={data_raw.index[-1]}  "
-        f"k={TRAIN_SIZE}  period={BACKTEST_START}→{BACKTEST_END or 'end'}  "
-        f"mode={mode}  |r|>={BACKTEST_RESIDUAL_THR_BP}  |z|>={BACKTEST_ZSCORE_THR}  "
-        f"L={BACKTEST_Z_LOOKBACK}",
+        "backtest  src=%s  n=%d  asof=%s  k=%d  period=%s→%s  "
+        "mode=%s  |r|>=%g  |z|>=%g  L=%d"
+        % (
+            src, len(data_raw), data_raw.index[-1], TRAIN_SIZE,
+            start, end or "end", mode, r_thr, z_thr, BACKTEST_Z_LOOKBACK,
+        ),
         flush=True,
     )
 
@@ -34,10 +65,10 @@ def main() -> None:
         pred,
         specs=CHOSEN_MODELS,
         train_size=TRAIN_SIZE,
-        start=BACKTEST_START,
-        end=BACKTEST_END,
-        residual_thr_bp=BACKTEST_RESIDUAL_THR_BP,
-        z_thr=BACKTEST_ZSCORE_THR,
+        start=start,
+        end=end,
+        residual_thr_bp=r_thr,
+        z_thr=z_thr,
         z_lookback=BACKTEST_Z_LOOKBACK,
         position_mode=mode,
     )
@@ -46,7 +77,7 @@ def main() -> None:
         return
 
     for name, res in results.items():
-        res.path.to_csv(f"backtest_{name}.csv")
+        res.path.to_csv("backtest_%s.csv" % name)
         s = res.summary
         print(
             "  %s  fit: oos_r2=%.3f rmse=%.3f  |  strat: trades=%s pnl=%.3f "
@@ -64,8 +95,8 @@ def main() -> None:
             ),
             flush=True,
         )
-        for p in save_backtest_plots(res):
-            print(f"    wrote {p}", flush=True)
+        for path in save_backtest_plots(res):
+            print("    wrote %s" % path, flush=True)
 
     summary = summary_table(results)
     for c in (
