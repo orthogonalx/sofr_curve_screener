@@ -20,7 +20,7 @@ from curve_config import (
     CHOSEN_MODELS,
     TRAIN_SIZE,
 )
-from lib.data import build_panel, load_panel
+from lib.data import build_panel, load_panel, pull_history_into_store, refresh_live_store
 from lib.models import backtest_chosen_models, save_backtest_plots, summary_table
 
 
@@ -40,6 +40,14 @@ def main(argv=None) -> None:
         "--mode", default=None,
         help="Position mode: one_bar | hold (default: config)",
     )
+    p.add_argument(
+        "--pull-history", action="store_true",
+        help="Re-download full BBG history into sofr_live.csv (up to now) before backtest",
+    )
+    p.add_argument(
+        "--refresh", action="store_true",
+        help="Append latest bar only (does NOT fill gaps if store is stale)",
+    )
     args = p.parse_args(argv)
 
     z_thr = float(BACKTEST_ZSCORE_THR if args.z_thr is None else args.z_thr)
@@ -48,7 +56,14 @@ def main(argv=None) -> None:
     end = BACKTEST_END if args.end is None else args.end
     mode = (args.mode or BACKTEST_POSITION_MODE or "one_bar").strip().lower()
 
-    data_raw, src = load_panel()
+    if args.pull_history:
+        print("  [backtest] pulling full history → sofr_live.csv …", flush=True)
+        pull_history_into_store()
+        data_raw, src = load_panel()
+    elif args.refresh:
+        data_raw, src = refresh_live_store(force_history=False)
+    else:
+        data_raw, src = load_panel()
     _, full, pred = build_panel(data_raw)
     print(
         "backtest  src=%s  n=%d  asof=%s  k=%d  period=%s→%s  "
