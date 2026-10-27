@@ -101,8 +101,10 @@ def verify_fold0(
         "n_train": [k],
     })
 
-    # Cross-check vs rolling_ols fold 0
-    res = rolling_ols(full, pred, spec, train_size=k)
+    # Cross-check vs rolling_ols fold 0 (allow small k for audits)
+    res = rolling_ols(full, pred, spec, train_size=k, min_train_obs=min(k, 1))
+    if res.predictions.empty:
+        raise ValueError("rolling_ols returned no predictions — check train_size / data")
     row0 = res.predictions.iloc[0]
     fold0 = res.fold_metrics.iloc[0]
     match_pred = abs(float(row0["y_pred"]) - y_hat) < 1e-8
