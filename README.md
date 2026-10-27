@@ -22,6 +22,7 @@ Or open the matching `run_*.ipynb`.
 | `prediction --once --pull-history` | Same, but refresh full BBG history into live store first |
 | `pipeline` | Explore / one-shot panel + graphs |
 | `backtest` | Legacy pipeline backtest (`CHOSEN_MODELS`) |
+| `verify` | Fold-0 OLS check → `exports/backtest/verify_*.csv` |
 | `crosscheck` | Python vs BBG listed curves/flies → Excel |
 | `correlations` | Level corr + percentile heatmap + scatter + Excel panel |
 | `pull --tickers A,B --start YYYYMMDD` | BBG panel only → `exports/panels/` |
@@ -70,3 +71,5 @@ Missing series auto-pull; `CL1`/`CO1` fall back to daily `bdh` if intradaily is 
 | `SMTP_*` / `EMAIL_*` | Prediction email |
 
 New ticker → add to `CROSS_ASSET` (or `CUSTOM_*`) → `--pull-history` once.
+
+**Verify fold 0 in Excel:** `run_backtest_verify.ipynb` or `python run_dz.py verify`.
