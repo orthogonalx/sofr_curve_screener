@@ -399,7 +399,7 @@ CSV_CORR_SERIES = ["10", "30", "2s5s", "5s10s", "10s30s", "5s7s10s", "2s5s10s"] 
     SPREAD_NAMES
 ) + list(EXTRA_MAP)
 CORR_EVOL_ANCHORS = ("10", "USSFCT30")
-CORR_EVOL_ASSETS = ("CO1", "ESA", "XAU")
+CORR_EVOL_ASSETS = ("ESA", "CO1", "XAU")  # ESA first
 
 
 def run_corr_analysis(

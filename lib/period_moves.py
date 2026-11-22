@@ -36,7 +36,11 @@ MOVE_STRUCTURES = list(
     getattr(
         _cfg,
         "MOVE_STRUCTURES",
-        ["2s5s", "5s10s", "10s30s", "2s5s10s", "5s10s30s", "USSFCT05", "USSFCT10", "USSFCT30"],
+        [
+            "ESA", "CO1", "XAU",
+            "2s5s", "5s10s", "10s30s", "2s5s10s", "5s10s30s",
+            "USSFCT05", "USSFCT10", "USSFCT30",
+        ],
     )
 )
 REFRESH_ON_RUN = bool(getattr(_cfg, "REFRESH_DATA_ON_REQUEST", True))
@@ -260,9 +264,12 @@ def run_period_moves(
     elif csv_path:
         panel, _ = load_moves_panel_from_csv(csv_path)
         # include extras in structures table when present
+        # Always surface ESA (then CO1/XAU) at the front of the structures table
         for extra in ("ESA", "CO1", "XAU", "CL1"):
             if extra in panel.columns and extra not in st_want:
-                st_want.append(extra)
+                st_want.insert(0 if extra == "ESA" else len(st_want), extra)
+            elif extra == "ESA" and extra in st_want:
+                st_want = ["ESA"] + [x for x in st_want if x != "ESA"]
     else:
         store_path = resolve_live_store_path()
         data_before, src_before = load_panel()

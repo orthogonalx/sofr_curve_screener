@@ -270,8 +270,10 @@ CUSTOM_MODELS: List[RegressionSpec] = [
 # ── Period move tables (run_period_moves.ipynb) ────────────────────────────────
 # Outright tenors (clean names = years as strings from USOSFR)
 MOVE_OUTRIGHTS: List[str] = ["2", "5", "10", "30"]
-# Curves / flies / spreads (structures + CROSS_ASSET clean names)
+# Curves / flies / spreads / extras (CROSS_ASSET clean names)
+# ESA first — primary risk asset for move tables
 MOVE_STRUCTURES: List[str] = [
+    "ESA", "CO1", "XAU",
     "2s5s", "5s10s", "10s30s", "2s5s10s", "5s10s30s",
     "USSFCT05", "USSFCT10", "USSFCT30",
 ]
