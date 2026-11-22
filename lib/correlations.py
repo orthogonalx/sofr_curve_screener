@@ -372,6 +372,7 @@ def plot_dual_corr_scatter(
     asset_y=None,
     corr_window=None,
     highlight_days=None,
+    title=None,
 ) -> Tuple[Optional[Path], Optional[pd.DataFrame]]:
     try:
         import matplotlib
@@ -404,15 +405,17 @@ def plot_dual_corr_scatter(
             s=28, c="#c4a574", alpha=0.85, edgecolors="none", label="history", zorder=2,
         )
     if len(recent):
+        recent_lbl = "last week" if days == 7 else ("last %d days" % days)
         ax.scatter(
             recent["corr_x"], recent["corr_y"],
-            s=42, c="#1f77d0", alpha=0.95, edgecolors="white", linewidths=0.4,
-            label="last %d days" % days, zorder=3,
+            s=52, c="#1f77d0", alpha=0.95, edgecolors="white", linewidths=0.5,
+            label=recent_lbl, zorder=3,
         )
 
     ax.scatter(
         [float(last["corr_x"])], [float(last["corr_y"])],
         s=55, c="#5c4033", zorder=4, edgecolors="white", linewidths=0.5,
+        label="latest",
     )
     ax.annotate(
         "%.1f, %.1f" % (float(last["corr_x"]), float(last["corr_y"])),
@@ -426,11 +429,15 @@ def plot_dual_corr_scatter(
                 max(100.0, float(frame["corr_x"].max()) + 5))
     ax.set_ylim(min(-100.0, float(frame["corr_y"].min()) - 5),
                 max(100.0, float(frame["corr_y"].max()) + 5))
-    ax.set_xlabel(r"$\rho$(%s, %s)   ×100" % (rcol, ax_name), fontsize=10)
-    ax.set_ylabel(r"$\rho$(%s, %s)   ×100" % (rcol, ay_name), fontsize=10)
+    xlab = "10y" if str(rcol) == "10" else str(rcol)
+    ax.set_xlabel(r"$\rho$(%s, %s)   ×100" % (xlab, ax_name), fontsize=10)
+    ax.set_ylabel(r"$\rho$(%s, %s)   ×100" % (xlab, ay_name), fontsize=10)
     ax.set_title(
-        "Rolling corr scatter  |  window=%d  |  asof %s"
-        % (cw, pd.Timestamp(frame.index[-1]).strftime("%Y-%m-%d %H:%M")),
+        title
+        or (
+            "Dot plot — rolling corr  |  window=%d  |  asof %s"
+            % (cw, pd.Timestamp(frame.index[-1]).strftime("%Y-%m-%d %H:%M"))
+        ),
         fontsize=11, pad=10,
     )
     ax.legend(loc="upper left", frameon=True, fontsize=8)

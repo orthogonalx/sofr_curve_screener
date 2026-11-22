@@ -568,24 +568,32 @@ def run_corr_analysis(
         print("  [corr] %s" % score_path.resolve(), flush=True)
         paths["corr_pair_scorecard"] = score_path
 
-    # ── dual scatter: ρ(10, ESA) vs ρ(10, CO1) and vs XAU ─────────────────────
-    if "10" in panel.columns and "ESA" in panel.columns:
-        for y_asset, tag in (("CO1", "co1"), ("XAU", "xau")):
-            if y_asset not in panel.columns:
-                continue
-            try:
-                p = corr.plot_dual_corr_scatter(
-                    panel,
-                    rates="10",
-                    asset_x="ESA",
-                    asset_y=y_asset,
-                    corr_window=corr_window,
-                    path=out / ("corr_scatter_10y_esa_vs_%s.png" % tag),
-                )
-                if p:
-                    paths[Path(p).stem] = Path(p)
-            except Exception as exc:  # noqa: BLE001
-                print("  [corr] scatter 10/ESA/%s failed: %s" % (y_asset, exc), flush=True)
+    # ── Dot plot: ρ(10y, oil) on x vs ρ(10y, ESA) on y; last week highlighted ─
+    oil = "CO1" if "CO1" in panel.columns else ("CL1" if "CL1" in panel.columns else None)
+    if "10" in panel.columns and "ESA" in panel.columns and oil:
+        try:
+            p, _frame = corr.plot_dual_corr_scatter(
+                panel,
+                rates="10",
+                asset_x=oil,
+                asset_y="ESA",
+                corr_window=corr_window,
+                highlight_days=7,
+                title=(
+                    "Dot plot — ρ(10y, %s) vs ρ(10y, ESA)  |  window=%d  |  "
+                    "last week in blue" % (oil, corr_window)
+                ),
+                path=out / "corr_dotplot_10y_oil_vs_esa.png",
+            )
+            if p:
+                paths[Path(p).stem] = Path(p)
+        except Exception as exc:  # noqa: BLE001
+            print("  [corr] dot plot 10y/oil/ESA failed: %s" % exc, flush=True)
+    else:
+        print(
+            "  [corr] skip oil-vs-ESA dot plot — need 10, ESA, and CO1/CL1 in panel",
+            flush=True,
+        )
 
     return {
         "paths": paths,
