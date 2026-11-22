@@ -20,9 +20,13 @@ import pandas as pd
 
 import curve_config as _cfg
 from lib.data import (
+    all_curves,
+    all_flies,
     build_panel,
     ensure_series_in_live_store,
     load_panel,
+    resolve_live_store_path,
+    tickers_for_names,
     update_live_store_to_now,
 )
 
@@ -182,6 +186,27 @@ def _structures_with_ussfct(panel: pd.DataFrame, base: Sequence[str]) -> List[st
     return names
 
 
+def _names_needed_for_moves(outrights, structures):
+    """Outrights + structure names + tenor legs so curves/flies can be built."""
+    names = list(outrights) + list(structures)
+    curve_map = {n: (a, b) for n, a, b in all_curves()}
+    fly_map = {n: (a, b, c) for n, a, b, c in all_flies()}
+    for n in list(structures):
+        if n in curve_map:
+            a, b = curve_map[n]
+            names.extend([str(a), str(b)])
+        elif n in fly_map:
+            a, b, c = fly_map[n]
+            names.extend([str(a), str(b), str(c)])
+    # unique, preserve order
+    seen, out = set(), []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
 def run_period_moves(
     start,
     end,
@@ -190,55 +215,64 @@ def run_period_moves(
     structures=None,
     panel=None,
     refresh=None,
-    prefer_daily=False,
+    prefer_daily=True,
 ):
     """
     Build outrights + structures move tables between start and end.
     Outrights reported in bp (percent×100). Structures already in bp / BBG units.
 
     refresh (default: REFRESH_DATA_ON_REQUEST): merge-update sofr_live to now
-    (core SOFR; daily bdh fallback if intradaily fails) before building tables.
+    for the small ticker set needed by these tables (daily bdh by default —
+    same path as run_pull_data).
     """
     out_names = list(outrights if outrights is not None else MOVE_OUTRIGHTS)
     st_want = list(structures if structures is not None else MOVE_STRUCTURES)
     do_refresh = REFRESH_ON_RUN if refresh is None else bool(refresh)
     if panel is None:
+        store_path = resolve_live_store_path()
         data_before, src_before = load_panel()
         asof_before = data_before.index[-1] if len(data_before) else None
         print(
-            "  [moves] store before refresh: src=%s  n=%d  asof=%s"
-            % (src_before, len(data_before), asof_before),
+            "  [moves] store before: path=%s  src=%s  n=%d  asof=%s"
+            % (store_path, src_before, len(data_before), asof_before),
             flush=True,
         )
         if do_refresh:
+            need_names = _names_needed_for_moves(out_names, st_want)
+            secs = tickers_for_names(need_names)
             print(
-                "  [moves] refreshing sofr_live → now (core SOFR, daily=%s) …"
-                % bool(prefer_daily),
+                "  [moves] refreshing %d tickers (daily=%s): %s"
+                % (len(secs), bool(prefer_daily), secs),
                 flush=True,
             )
-            try:
-                update_live_store_to_now(
-                    core_only=True,
-                    lookback_days=45,
-                    prefer_daily=prefer_daily,
-                )
-            except Exception as exc:  # noqa: BLE001
-                print(
-                    "  [moves] refresh failed (%s) — using existing store" % exc,
-                    flush=True,
-                )
+            if not secs:
+                print("  [moves] no resolvable tickers — skip refresh", flush=True)
+            else:
+                try:
+                    update_live_store_to_now(
+                        path=store_path,
+                        securities=secs,
+                        lookback_days=60,
+                        prefer_daily=prefer_daily,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        "  [moves] refresh failed (%s) — using existing store" % exc,
+                        flush=True,
+                    )
         ensure_series_in_live_store(list(out_names) + list(st_want))
         data_raw, src = load_panel()
         _, panel, _ = build_panel(data_raw)
         asof = panel.index[-1] if len(panel) else None
         print(
-            "  [moves] src=%s  n=%d  asof=%s" % (src, len(panel), asof),
+            "  [moves] after: path=%s  src=%s  n=%d  asof=%s"
+            % (store_path, src, len(panel), asof),
             flush=True,
         )
         if asof_before is not None and asof is not None and asof <= asof_before:
             print(
                 "  [moves] WARNING: asof did not advance (%s → %s). "
-                "BBG may have returned no new bars."
+                "Check BBG / that git pull brought the latest lib/data.py."
                 % (asof_before, asof),
                 flush=True,
             )
@@ -265,14 +299,18 @@ def main(argv=None):
         help="Skip BBG update; use existing sofr_live.csv only",
     )
     p.add_argument(
-        "--daily", action="store_true",
-        help="Prefer daily bdh for the refresh (same path as run_pull_data)",
+        "--daily", action="store_true", default=True,
+        help="Prefer daily bdh for the refresh (default; same path as run_pull_data)",
+    )
+    p.add_argument(
+        "--intradaily", action="store_true",
+        help="Use bdib intradaily instead of daily bdh",
     )
     args = p.parse_args(argv)
     out_tbl, st_tbl, meta, _ = run_period_moves(
         args.start, args.end,
         refresh=not args.no_refresh,
-        prefer_daily=args.daily,
+        prefer_daily=not args.intradaily,
     )
     print("\n=== OUTRIGHTS (bp)  horizon=%s ===" % meta["horizon"], flush=True)
     print(out_tbl.round(3).to_string(index=False), flush=True)
