@@ -335,7 +335,7 @@ def main(argv=None) -> None:
     if script is None:
         print(
             "Unknown command %r. Use: prediction | backtest | pipeline | crosscheck | "
-            "correlations | pull | custom | moves | verify | report" % cmd
+            "correlations | pull | custom | moves | verify | report | csv-analysis" % cmd
         )
         raise SystemExit(2)
 
