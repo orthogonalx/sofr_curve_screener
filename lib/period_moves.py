@@ -37,7 +37,7 @@ MOVE_STRUCTURES = list(
         _cfg,
         "MOVE_STRUCTURES",
         [
-            "ESA", "CO1", "XAU",
+            "ESA", "CO1",
             "2s5s", "5s10s", "10s30s", "2s5s10s", "5s10s30s",
             "USSFCT05", "USSFCT10", "USSFCT30",
         ],
@@ -264,8 +264,8 @@ def run_period_moves(
     elif csv_path:
         panel, _ = load_moves_panel_from_csv(csv_path)
         # include extras in structures table when present
-        # Always surface ESA (then CO1/XAU) at the front of the structures table
-        for extra in ("ESA", "CO1", "XAU", "CL1"):
+        # Always surface ESA (then CO1) at the front of the structures table
+        for extra in ("ESA", "CO1"):
             if extra in panel.columns and extra not in st_want:
                 st_want.insert(0 if extra == "ESA" else len(st_want), extra)
             elif extra == "ESA" and extra in st_want:
