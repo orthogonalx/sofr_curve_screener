@@ -922,9 +922,21 @@ def resolve_live_store_path(path=None):
     return dest.resolve()
 
 
+def _with_alt_pricing(securities):
+    """Also try USOSFR# Curncy (no BGN) when BGN series look stale."""
+    out, seen = [], set()
+    for sec in securities:
+        for cand in (sec, re.sub(r"\s+BGN\s+", " ", str(sec), flags=re.I).strip()):
+            key = cand.lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(cand)
+    return out
+
+
 def update_live_store_to_now(
     path=None, freq=None, core_only=True, lookback_days=14, prefer_daily=False,
-    securities=None,
+    securities=None, require_new=False,
 ):
     """
     Extend sofr_live.csv up to now without wiping it.
@@ -934,13 +946,20 @@ def update_live_store_to_now(
     If intradaily bdib fails (or prefer_daily=True), falls back to daily bdh.
 
     securities: optional explicit BBG ticker list (overrides core_only).
+    require_new: if True, raise when BBG does not advance store asof.
     """
     dest = resolve_live_store_path(path)
     existing = load_live_store(dest) if dest.exists() else pd.DataFrame()
+    asof0 = pd.Timestamp(existing.index.max()) if len(existing) else None
     if securities is not None:
-        secs = list(securities)
+        secs = _with_alt_pricing(list(securities))
     else:
         secs = _core_securities() if core_only else _securities()
+
+    # If store is already stale, pull a wide window from a fixed floor — not only lookback.
+    floor = (pd.Timestamp.now() - pd.Timedelta(days=max(int(lookback_days), 90))).strftime(
+        "%Y%m%d"
+    )
     if existing.empty:
         start = None  # config BBG_START_DATE
         print(
@@ -949,44 +968,87 @@ def update_live_store_to_now(
             flush=True,
         )
     else:
-        last = pd.Timestamp(existing.index.max())
-        start = (last - pd.Timedelta(days=int(lookback_days))).strftime("%Y%m%d")
+        start_lookback = (asof0 - pd.Timedelta(days=int(lookback_days))).strftime("%Y%m%d")
+        start = min(start_lookback, floor)
         print(
             "  [history] merge update from %s (last store=%s)  n_sec=%d  "
             "prefer_daily=%s  path=%s"
-            % (start, last, len(secs), prefer_daily, dest),
+            % (start, asof0, len(secs), prefer_daily, dest),
             flush=True,
         )
 
-    extra = None
-    if not prefer_daily:
-        try:
-            extra = _fetch_bdib_panel(
-                start_date=start, end_date=None, freq=freq, securities=secs,
-            )
-        except ValueError as exc:
-            print(
-                "  [history] intradaily failed (%s) — trying daily bdh" % exc,
-                flush=True,
-            )
-    if extra is None or (isinstance(extra, pd.DataFrame) and extra.empty):
-        try:
-            extra = _fetch_daily_panel(secs, start_date=start, end_date=None)
-        except ValueError as exc:
-            print("  [history] daily bdh failed: %s" % exc, flush=True)
-            if existing.empty:
-                raise
-            print(
-                "  [history] keeping existing store  %s → %s  n=%d  path=%s"
-                % (existing.index[0], existing.index[-1], len(existing), dest),
-                flush=True,
-            )
-            return existing
+    chunks = []
+    errors = []
 
-    if extra is None or extra.empty:
-        if existing.empty:
-            raise ValueError("BBG update returned empty")
+    def _try_pull(label, fn):
+        try:
+            panel = fn()
+        except Exception as exc:  # noqa: BLE001
+            print("  [history] %s failed: %s" % (label, exc), flush=True)
+            errors.append("%s: %s" % (label, exc))
+            return
+        if panel is None or panel.empty:
+            print("  [history] %s empty" % label, flush=True)
+            errors.append("%s: empty" % label)
+            return
+        print(
+            "  [history] %s OK  n=%d  %s → %s"
+            % (label, len(panel), panel.index[0], panel.index[-1]),
+            flush=True,
+        )
+        chunks.append(panel)
+
+    # Daily first when preferred (same path as run_pull_data); always try both if needed.
+    if prefer_daily:
+        _try_pull(
+            "daily bdh",
+            lambda: _fetch_daily_panel(secs, start_date=start, end_date=None),
+        )
+        if not chunks or (asof0 is not None and chunks[-1].index[-1] <= asof0):
+            bdib_start = (pd.Timestamp.now() - pd.Timedelta(days=21)).strftime("%Y%m%d")
+            _try_pull(
+                "bdib 21d",
+                lambda: _fetch_bdib_panel(
+                    start_date=bdib_start, end_date=None, freq=freq, securities=secs,
+                ),
+            )
+    else:
+        _try_pull(
+            "bdib",
+            lambda: _fetch_bdib_panel(
+                start_date=start, end_date=None, freq=freq, securities=secs,
+            ),
+        )
+        if not chunks or (asof0 is not None and chunks[-1].index[-1] <= asof0):
+            _try_pull(
+                "daily bdh",
+                lambda: _fetch_daily_panel(secs, start_date=start, end_date=None),
+            )
+
+    if not chunks:
+        msg = "BBG update returned no series (%s)" % ("; ".join(errors) or "unknown")
+        if require_new or existing.empty:
+            raise RuntimeError(msg)
+        print("  [history] %s — keeping existing store" % msg, flush=True)
         return existing
+
+    extra = pd.concat(chunks, axis=0)
+    extra = extra[~extra.index.duplicated(keep="last")].sort_index()
+    extra.index.name = "time"
+    bbg_asof = pd.Timestamp(extra.index.max())
+    print("  [history] BBG panel asof=%s  (store was %s)" % (bbg_asof, asof0), flush=True)
+
+    if asof0 is not None and bbg_asof <= asof0:
+        msg = (
+            "BBG latest bar is %s but sofr_live already at %s — "
+            "Bloomberg is not returning newer history on this host"
+            % (bbg_asof, asof0)
+        )
+        if require_new:
+            raise RuntimeError(msg)
+        print("  [history] %s — keeping existing store" % msg, flush=True)
+        return existing
+
     if existing.empty:
         save_live_store(extra, dest)
         print(
@@ -1127,7 +1189,7 @@ def refresh_live_store(force_history=False):
 
 
 def load_panel():
-    live, path = Path(LIVE_STORE_PATH), Path(DATA_PATH)
+    live, path = resolve_live_store_path(), Path(DATA_PATH)
     if live.exists():
         return load_live_store(live), "live:%s" % live
     if path.exists():
