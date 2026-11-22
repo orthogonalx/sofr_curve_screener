@@ -55,11 +55,13 @@ def parse_column(col) -> Optional[str]:
         return "USSFCT%02d" % int(m.group(1))
     if re.fullmatch(r"USSFCT\d+", s, re.I):
         return s.upper()
-    # ESA — be aggressive (most important extra)
+    # ESA — be aggressive (most important extra). Also ES1 front-month future.
     key = _norm_key(s)
     if key == "esa" or key.startswith("esa ") or re.match(r"^esa\b", key):
         return "ESA"
     if re.search(r"\besa\b", key) and ("index" in key or "equity" in key):
+        return "ESA"
+    if re.match(r"^es1\b", key) or key in {"es1 index", "es1 equity"}:
         return "ESA"
     # CO1 / other extras
     for clean, aliases in EXTRA_MAP.items():
