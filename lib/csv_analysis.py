@@ -394,6 +394,158 @@ def plot_extras_vs_rates(panel: pd.DataFrame, out_dir=OUT_DIR) -> Optional[Path]
     return dest
 
 
+# Focus series for corr / percentile / evolution
+CSV_CORR_SERIES = ["10", "30", "2s5s", "5s10s", "10s30s", "5s7s10s", "2s5s10s"] + list(
+    SPREAD_NAMES
+) + list(EXTRA_MAP)
+CORR_EVOL_ANCHORS = ("10", "USSFCT30")
+CORR_EVOL_ASSETS = ("CO1", "ESA", "XAU")
+
+
+def run_corr_analysis(
+    panel: pd.DataFrame,
+    out_dir=OUT_DIR,
+    corr_window: int = 50,
+    pct_lookback: int = 200,
+) -> Dict[str, object]:
+    """
+    Reuse lib.correlations: level + percentile heatmaps, rolling-corr evolution
+    for 10y & USSFCT30 vs CO1/ESA/XAU, dual scatter, pair scorecard.
+    """
+    from lib import correlations as corr
+
+    out = _ensure_dir(out_dir)
+    series = [c for c in CSV_CORR_SERIES if c in panel.columns]
+    paths: Dict[str, Path] = {}
+    if len(series) < 2:
+        print("  [corr] need ≥2 series; have %s" % series, flush=True)
+        return {"paths": paths}
+
+    level = corr.corr_level_matrix(panel, series=series, window=corr_window)
+    pmat = corr.corr_percentile_matrix(
+        panel, series=series, corr_window=corr_window, pct_lookback=pct_lookback,
+    )
+    level.to_csv(out / "corr_level.csv")
+    pmat.to_csv(out / "corr_percentile.csv")
+
+    p1 = corr.plot_corr_heatmap(
+        level,
+        title="Corr level (last %d bars)" % corr_window,
+        path=out / "corr_level_heatmap.png",
+        vmin=-1, vmax=1, fmt="%.2f",
+    )
+    p2 = corr.plot_corr_heatmap(
+        pmat,
+        title="Corr percentile (window=%d, lookback=%d) — 100=strongest historically"
+        % (corr_window, pct_lookback),
+        path=out / "corr_percentile_heatmap.png",
+        vmin=0, vmax=100, fmt="%.0f",
+    )
+    if p1:
+        paths["corr_level_heatmap"] = Path(p1)
+    if p2:
+        paths["corr_percentile_heatmap"] = Path(p2)
+
+    # ── evolution: rolling ρ(anchor, asset) ──────────────────────────────────
+    evol_frames = {}
+    for anchor in CORR_EVOL_ANCHORS:
+        if anchor not in panel.columns:
+            print("  [corr] skip evol — missing anchor %s" % anchor, flush=True)
+            continue
+        a = pd.to_numeric(panel[anchor], errors="coerce")
+        fig, ax = plt.subplots(figsize=(10, 4.8))
+        frame = pd.DataFrame(index=panel.index)
+        for asset in CORR_EVOL_ASSETS:
+            if asset not in panel.columns:
+                print("  [corr] skip evol leg %s" % asset, flush=True)
+                continue
+            b = pd.to_numeric(panel[asset], errors="coerce")
+            rc = corr.rolling_corr_pair(a, b, corr_window)
+            frame[asset] = rc
+            ax.plot(panel.index, rc, label="%s vs %s" % (anchor, asset), lw=1.3)
+        ax.axhline(0, color="k", lw=0.8)
+        ax.set_ylim(-1.05, 1.05)
+        ax.set_title(
+            "Rolling corr evolution — %s vs oil/ESA/XAU  (window=%d)"
+            % (anchor, corr_window)
+        )
+        ax.set_ylabel("ρ")
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+        fname = "corr_evol_%s_vs_extras.png" % (
+            "10y" if anchor == "10" else str(anchor).lower()
+        )
+        dest = out / fname
+        fig.tight_layout()
+        fig.savefig(dest, dpi=120)
+        plt.close(fig)
+        print("  [corr] %s" % dest, flush=True)
+        paths[dest.stem] = dest
+        frame = frame.dropna(how="all")
+        frame.to_csv(out / (dest.stem + ".csv"))
+        evol_frames[anchor] = frame
+
+    # ── pair scorecard: latest ρ + percentile (focus pairs) ───────────────────
+    rows = []
+    for anchor in CORR_EVOL_ANCHORS:
+        if anchor not in panel.columns:
+            continue
+        a = pd.to_numeric(panel[anchor], errors="coerce")
+        for asset in CORR_EVOL_ASSETS:
+            if asset not in panel.columns:
+                continue
+            b = pd.to_numeric(panel[asset], errors="coerce")
+            rc = corr.rolling_corr_pair(a, b, corr_window).dropna()
+            if len(rc) < 10:
+                continue
+            hist = rc.iloc[-pct_lookback:] if len(rc) >= pct_lookback else rc
+            last = float(rc.iloc[-1])
+            # same percentile helper as correlations module
+            pct = float(100.0 * np.mean(hist.to_numpy(dtype=float) <= last))
+            rows.append({
+                "pair": "%s vs %s" % (anchor, asset),
+                "anchor": anchor,
+                "asset": asset,
+                "rho_last": last,
+                "percentile": pct,
+                "asof": rc.index[-1],
+                "n_hist": int(len(hist)),
+            })
+    score = pd.DataFrame(rows)
+    if not score.empty:
+        score_path = out / "corr_pair_scorecard.csv"
+        score.to_csv(score_path, index=False)
+        print("  [corr] %s" % score_path.resolve(), flush=True)
+        paths["corr_pair_scorecard"] = score_path
+
+    # ── dual scatter: ρ(10, CO1) vs ρ(10, ESA) and vs XAU ─────────────────────
+    if "10" in panel.columns and "CO1" in panel.columns:
+        for y_asset, tag in (("ESA", "esa"), ("XAU", "xau")):
+            if y_asset not in panel.columns:
+                continue
+            try:
+                p = corr.plot_dual_corr_scatter(
+                    panel,
+                    rates="10",
+                    asset_x="CO1",
+                    asset_y=y_asset,
+                    corr_window=corr_window,
+                    path=out / ("corr_scatter_10y_co1_vs_%s.png" % tag),
+                )
+                if p:
+                    paths[Path(p).stem] = Path(p)
+            except Exception as exc:  # noqa: BLE001
+                print("  [corr] scatter 10/CO1/%s failed: %s" % (y_asset, exc), flush=True)
+
+    return {
+        "paths": paths,
+        "level": level,
+        "percentile": pmat,
+        "scorecard": score,
+        "evol": evol_frames,
+    }
+
+
 def run_all_metrics(panel: pd.DataFrame, out_dir=OUT_DIR) -> Dict[str, Path]:
     """Starter pack of tables + charts → exports/csv_analysis/."""
     out = _ensure_dir(out_dir)
@@ -444,6 +596,12 @@ def run_all_metrics(panel: pd.DataFrame, out_dir=OUT_DIR) -> Dict[str, Path]:
                 paths[Path(p).stem] = Path(p)
         except Exception as exc:  # noqa: BLE001
             print("  [plot] %s failed: %s" % (getattr(fn, "__name__", fn), exc), flush=True)
+
+    try:
+        corr_out = run_corr_analysis(panel, out_dir=out)
+        paths.update(corr_out.get("paths") or {})
+    except Exception as exc:  # noqa: BLE001
+        print("  [corr] pack failed: %s" % exc, flush=True)
     return paths
 
 
