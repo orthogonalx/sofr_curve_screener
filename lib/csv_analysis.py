@@ -36,6 +36,12 @@ def parse_column(col) -> Optional[str]:
     s = str(col).strip()
     if not s:
         return None
+    # Excel duplicate headers: "ESA Index.1"
+    s = re.sub(r"\.\d+$", "", s).strip()
+    # strip trailing field names from BBG exports
+    s = re.sub(
+        r"\s+(PX_LAST|LAST_PRICE|Close|CLOSE|Mid|MID)$", "", s, flags=re.I
+    ).strip()
     # USOSFR{N} [BGN] Curncy  OR bare USOSFR{N}
     m = re.match(r"^USOSFR\s*(\d+)(?:\s+BGN)?(?:\s+Curncy)?$", s, re.I)
     if m:
@@ -49,11 +55,18 @@ def parse_column(col) -> Optional[str]:
         return "USSFCT%02d" % int(m.group(1))
     if re.fullmatch(r"USSFCT\d+", s, re.I):
         return s.upper()
-    # extras
+    # ESA — be aggressive (most important extra)
     key = _norm_key(s)
+    if key == "esa" or key.startswith("esa ") or re.match(r"^esa\b", key):
+        return "ESA"
+    if re.search(r"\besa\b", key) and ("index" in key or "equity" in key):
+        return "ESA"
+    # CO1 / other extras
     for clean, aliases in EXTRA_MAP.items():
         if key in {_norm_key(a) for a in aliases} or key == clean.lower():
             return clean
+    if re.match(r"^co1\b", key) or key in {"co1 comdty", "brent", "co1"}:
+        return "CO1"
     return None
 
 
@@ -127,6 +140,15 @@ def clean_panel(raw: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
     missing_t = [str(t) for t in range(1, 51) if str(t) not in out.columns]
     if missing_t:
         print("  [clean] missing USOSFR tenors: %s" % missing_t, flush=True)
+    if "ESA" not in out.columns:
+        print(
+            "  [clean] WARNING: ESA not found after clean. "
+            "Raw headers that look related: %s"
+            % [c for c in raw.columns if re.search(r"esa", str(c), re.I)],
+            flush=True,
+        )
+    else:
+        print("  [clean] ESA OK  non-null=%d" % int(out["ESA"].notna().sum()), flush=True)
     return out, report
 
 
@@ -345,7 +367,7 @@ def plot_corr_heatmap(
         c
         for c in (
             cols
-            or KEY_RATES + KEY_CURVES + KEY_FLIES[:3] + list(SPREAD_NAMES) + list(EXTRA_MAP)
+            or _corr_series(panel)
         )
         if c in panel.columns
     ]
@@ -393,12 +415,33 @@ def plot_extras_vs_rates(panel: pd.DataFrame, out_dir=OUT_DIR) -> Optional[Path]
     return dest
 
 
-# Focus series for corr / percentile / evolution
-CSV_CORR_SERIES = ["10", "30", "2s5s", "5s10s", "10s30s", "5s7s10s", "2s5s10s"] + list(
-    SPREAD_NAMES
-) + list(EXTRA_MAP)
+# Focus series for corr / percentile / evolution — ESA first always
+CSV_CORR_SERIES = [
+    "ESA", "CO1", "10", "30",
+    "2s5s", "5s10s", "10s30s", "5s7s10s", "2s5s10s",
+] + list(SPREAD_NAMES)
 CORR_EVOL_ANCHORS = ("10", "USSFCT30")
 CORR_EVOL_ASSETS = ("ESA", "CO1")  # ESA first
+
+
+def _corr_series(panel: pd.DataFrame) -> List[str]:
+    """ESA first; warn loudly if missing."""
+    series = [c for c in CSV_CORR_SERIES if c in panel.columns]
+    # if ESA exists under any alias already cleaned, keep front
+    if "ESA" in panel.columns and "ESA" not in series:
+        series = ["ESA"] + series
+    if "ESA" not in series:
+        print(
+            "  [corr] ERROR: ESA not in panel columns=%s — heatmap will omit it. "
+            "Check CSV header (need something like 'ESA Index')."
+            % list(panel.columns)[:40],
+            flush=True,
+        )
+    else:
+        # force ESA to index 0
+        series = ["ESA"] + [c for c in series if c != "ESA"]
+        print("  [corr] series (ESA first): %s" % series, flush=True)
+    return series
 
 
 def run_corr_analysis(
@@ -414,7 +457,7 @@ def run_corr_analysis(
     from lib import correlations as corr
 
     out = _ensure_dir(out_dir)
-    series = [c for c in CSV_CORR_SERIES if c in panel.columns]
+    series = _corr_series(panel)
     paths: Dict[str, Path] = {}
     if len(series) < 2:
         print("  [corr] need ≥2 series; have %s" % series, flush=True)
