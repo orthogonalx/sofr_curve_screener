@@ -914,8 +914,17 @@ def _fetch_daily_panel(securities, start_date=None, end_date=None):
     return panel
 
 
+def resolve_live_store_path(path=None):
+    """Absolute path to sofr_live.csv (relative paths resolve against cwd / repo)."""
+    dest = Path(path or LIVE_STORE_PATH)
+    if not dest.is_absolute():
+        dest = Path.cwd() / dest
+    return dest.resolve()
+
+
 def update_live_store_to_now(
     path=None, freq=None, core_only=True, lookback_days=14, prefer_daily=False,
+    securities=None,
 ):
     """
     Extend sofr_live.csv up to now without wiping it.
@@ -923,18 +932,29 @@ def update_live_store_to_now(
     Pulls recent bars (from last_ts - lookback_days, or full BBG_START if empty)
     for core SOFR securities by default (skips fragile CROSS_ASSET), then merges.
     If intradaily bdib fails (or prefer_daily=True), falls back to daily bdh.
+
+    securities: optional explicit BBG ticker list (overrides core_only).
     """
-    dest = Path(path or LIVE_STORE_PATH)
+    dest = resolve_live_store_path(path)
     existing = load_live_store(dest) if dest.exists() else pd.DataFrame()
-    secs = _core_securities() if core_only else _securities()
+    if securities is not None:
+        secs = list(securities)
+    else:
+        secs = _core_securities() if core_only else _securities()
     if existing.empty:
         start = None  # config BBG_START_DATE
+        print(
+            "  [history] empty store → full pull  path=%s  n_sec=%d"
+            % (dest, len(secs)),
+            flush=True,
+        )
     else:
         last = pd.Timestamp(existing.index.max())
         start = (last - pd.Timedelta(days=int(lookback_days))).strftime("%Y%m%d")
         print(
-            "  [history] merge update from %s (last store=%s)  n_sec=%d  core_only=%s"
-            % (start, last, len(secs), core_only),
+            "  [history] merge update from %s (last store=%s)  n_sec=%d  "
+            "prefer_daily=%s  path=%s"
+            % (start, last, len(secs), prefer_daily, dest),
             flush=True,
         )
 
@@ -957,8 +977,8 @@ def update_live_store_to_now(
             if existing.empty:
                 raise
             print(
-                "  [history] keeping existing store  %s → %s  n=%d"
-                % (existing.index[0], existing.index[-1], len(existing)),
+                "  [history] keeping existing store  %s → %s  n=%d  path=%s"
+                % (existing.index[0], existing.index[-1], len(existing), dest),
                 flush=True,
             )
             return existing
@@ -982,6 +1002,23 @@ def update_live_store_to_now(
         flush=True,
     )
     return combined
+
+
+def tickers_for_names(names):
+    """Clean names → BBG tickers (skip unknowns)."""
+    out, seen, missing = [], set(), []
+    for n in names:
+        t = bbg_ticker_for_name(n)
+        if t is None:
+            missing.append(n)
+            continue
+        key = t.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(t)
+    if missing:
+        print("  [tickers] unresolved: %s" % missing, flush=True)
+    return out
 
 
 def bbg_ticker_for_name(name):
