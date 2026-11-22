@@ -207,6 +207,31 @@ def _names_needed_for_moves(outrights, structures):
     return out
 
 
+def load_moves_panel_from_csv(csv_path, ffill: bool = True):
+    """
+    Build a moves-ready panel from a BBG dump (e.g. data_11_22.csv)
+    via lib.csv_analysis: clean → rates + curves/flies + spreads + extras.
+    """
+    from lib import csv_analysis
+
+    raw = csv_analysis.load_csv(csv_path, ffill=False)
+    cleaned, report = csv_analysis.clean_panel(raw)
+    if ffill:
+        cleaned = cleaned.ffill()
+    panel = csv_analysis.build_analysis_panel(cleaned)
+    print(
+        "  [moves] csv src=%s  n=%d  asof=%s  tenors=%d"
+        % (
+            Path(csv_path).resolve(),
+            len(panel),
+            report.get("asof"),
+            len(report.get("tenors") or []),
+        ),
+        flush=True,
+    )
+    return panel, report
+
+
 def run_period_moves(
     start,
     end,
@@ -216,19 +241,29 @@ def run_period_moves(
     panel=None,
     refresh=None,
     prefer_daily=False,
+    csv_path=None,
 ):
     """
     Build outrights + structures move tables between start and end.
     Outrights reported in bp (percent×100). Structures already in bp / BBG units.
 
-    refresh (default: REFRESH_DATA_ON_REQUEST): merge-update sofr_live to now
-    for the small ticker set needed by these tables. Default prefers bdib
-    (what originally filled sofr_live); set prefer_daily=True to try bdh first.
+    csv_path: if set (e.g. data_11_22.csv), load offline dump and skip BBG/live store.
+    panel: optional pre-built panel (takes precedence).
+    refresh: only applies to live-store path (ignored when csv_path is set).
     """
     out_names = list(outrights if outrights is not None else MOVE_OUTRIGHTS)
     st_want = list(structures if structures is not None else MOVE_STRUCTURES)
     do_refresh = REFRESH_ON_RUN if refresh is None else bool(refresh)
-    if panel is None:
+
+    if panel is not None:
+        pass
+    elif csv_path:
+        panel, _ = load_moves_panel_from_csv(csv_path)
+        # include extras in structures table when present
+        for extra in ("ESA", "CO1", "XAU", "CL1"):
+            if extra in panel.columns and extra not in st_want:
+                st_want.append(extra)
+    else:
         store_path = resolve_live_store_path()
         data_before, src_before = load_panel()
         asof_before = data_before.index[-1] if len(data_before) else None
@@ -305,6 +340,10 @@ def main(argv=None):
     p.add_argument("--start", required=True, help='e.g. "10/15/26 09:00"')
     p.add_argument("--end", required=True, help='e.g. "10/16/26 12:00"')
     p.add_argument(
+        "--csv", default=None,
+        help="Offline BBG dump (e.g. data_11_22.csv) — skips live store / BBG",
+    )
+    p.add_argument(
         "--no-refresh", action="store_true",
         help="Skip BBG update; use existing sofr_live.csv only",
     )
@@ -319,7 +358,8 @@ def main(argv=None):
     args = p.parse_args(argv)
     out_tbl, st_tbl, meta, _ = run_period_moves(
         args.start, args.end,
-        refresh=not args.no_refresh,
+        csv_path=args.csv,
+        refresh=False if args.csv else (not args.no_refresh),
         prefer_daily=not args.intradaily,
     )
     print("\n=== OUTRIGHTS (bp)  horizon=%s ===" % meta["horizon"], flush=True)
