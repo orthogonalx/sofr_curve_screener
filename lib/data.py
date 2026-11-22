@@ -881,14 +881,48 @@ def pull_history_into_store(
     return hist
 
 
+def _fetch_daily_panel(securities, start_date=None, end_date=None):
+    """PX_LAST via bdh for each security (true daily bars). Skips failures."""
+    start = _as_dt(BBG_START_DATE if start_date is None else start_date)
+    end = _as_dt(BBG_END_DATE if end_date is None else end_date, default_now=True)
+    bq = _bquery()
+    print(
+        "  [daily] bdh  %s → %s  n=%d" % (start.date(), end.date(), len(securities)),
+        flush=True,
+    )
+    series_list = []
+    for sec in securities:
+        try:
+            s = _bdh_px_last(bq, sec, start, end)
+        except Exception as exc:  # noqa: BLE001
+            print("  [bdh] skip %s: %s" % (sec, exc), flush=True)
+            continue
+        if s is None or s.empty:
+            print("  [bdh] empty %s" % sec, flush=True)
+            continue
+        series_list.append(s)
+        print("  [bdh] %s  bars=%d" % (sec, len(s)), flush=True)
+    if not series_list:
+        raise ValueError("bdh returned no series for any security")
+    panel = pd.concat(series_list, axis=1).sort_index()
+    panel.index.name = "time"
+    print(
+        "  [daily] panel n=%d cols=%d  %s → %s"
+        % (len(panel), panel.shape[1], panel.index[0], panel.index[-1]),
+        flush=True,
+    )
+    return panel
+
+
 def update_live_store_to_now(
-    path=None, freq=None, core_only=True, lookback_days=14,
+    path=None, freq=None, core_only=True, lookback_days=14, prefer_daily=False,
 ):
     """
     Extend sofr_live.csv up to now without wiping it.
 
     Pulls recent bars (from last_ts - lookback_days, or full BBG_START if empty)
     for core SOFR securities by default (skips fragile CROSS_ASSET), then merges.
+    If intradaily bdib fails (or prefer_daily=True), falls back to daily bdh.
     """
     dest = Path(path or LIVE_STORE_PATH)
     existing = load_live_store(dest) if dest.exists() else pd.DataFrame()
@@ -903,20 +937,32 @@ def update_live_store_to_now(
             % (start, last, len(secs), core_only),
             flush=True,
         )
-    try:
-        extra = _fetch_bdib_panel(
-            start_date=start, end_date=None, freq=freq, securities=secs,
-        )
-    except ValueError as exc:
-        print("  [history] BBG update failed: %s" % exc, flush=True)
-        if existing.empty:
-            raise
-        print(
-            "  [history] keeping existing store  %s → %s  n=%d"
-            % (existing.index[0], existing.index[-1], len(existing)),
-            flush=True,
-        )
-        return existing
+
+    extra = None
+    if not prefer_daily:
+        try:
+            extra = _fetch_bdib_panel(
+                start_date=start, end_date=None, freq=freq, securities=secs,
+            )
+        except ValueError as exc:
+            print(
+                "  [history] intradaily failed (%s) — trying daily bdh" % exc,
+                flush=True,
+            )
+    if extra is None or (isinstance(extra, pd.DataFrame) and extra.empty):
+        try:
+            extra = _fetch_daily_panel(secs, start_date=start, end_date=None)
+        except ValueError as exc:
+            print("  [history] daily bdh failed: %s" % exc, flush=True)
+            if existing.empty:
+                raise
+            print(
+                "  [history] keeping existing store  %s → %s  n=%d"
+                % (existing.index[0], existing.index[-1], len(existing)),
+                flush=True,
+            )
+            return existing
+
     if extra is None or extra.empty:
         if existing.empty:
             raise ValueError("BBG update returned empty")
@@ -949,8 +995,9 @@ def bbg_ticker_for_name(name):
             return ticker
     if re.fullmatch(r"USSFCT\d+", s, re.I):
         return "%s Curncy" % s.upper()
-    if str(s).isdigit():
-        return "%s%d %s" % (BBG_PREFIX, int(s), BBG_SUFFIX)
+    m = re.fullmatch(r"(?:USOSFR)?(\d+)", s, re.I)
+    if m:
+        return "%s%d %s" % (BBG_PREFIX, int(m.group(1)), BBG_SUFFIX)
     # listed curve / fly
     for n, a, b in all_curves():
         if n == s:

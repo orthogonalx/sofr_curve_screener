@@ -19,7 +19,12 @@ import numpy as np
 import pandas as pd
 
 import curve_config as _cfg
-from lib.data import build_panel, ensure_series_in_live_store, load_panel
+from lib.data import (
+    build_panel,
+    ensure_series_in_live_store,
+    load_panel,
+    update_live_store_to_now,
+)
 
 DATA_BAR_MINUTES = float(getattr(_cfg, "DATA_BAR_MINUTES", 180))
 MOVE_OUTRIGHTS = list(getattr(_cfg, "MOVE_OUTRIGHTS", ["2", "5", "10", "30"]))
@@ -30,6 +35,7 @@ MOVE_STRUCTURES = list(
         ["2s5s", "5s10s", "10s30s", "2s5s10s", "5s10s30s", "USSFCT05", "USSFCT10", "USSFCT30"],
     )
 )
+REFRESH_ON_RUN = bool(getattr(_cfg, "REFRESH_DATA_ON_REQUEST", True))
 
 
 def parse_ts(text) -> pd.Timestamp:
@@ -183,18 +189,38 @@ def run_period_moves(
     outrights=None,
     structures=None,
     panel=None,
+    refresh=None,
+    prefer_daily=False,
 ):
     """
     Build outrights + structures move tables between start and end.
     Outrights reported in bp (percent×100). Structures already in bp / BBG units.
+
+    refresh (default: REFRESH_DATA_ON_REQUEST): merge-update sofr_live to now
+    (core SOFR; daily bdh fallback if intradaily fails) before building tables.
     """
     out_names = list(outrights if outrights is not None else MOVE_OUTRIGHTS)
     st_want = list(structures if structures is not None else MOVE_STRUCTURES)
+    do_refresh = REFRESH_ON_RUN if refresh is None else bool(refresh)
     if panel is None:
+        if do_refresh:
+            print("  [moves] refreshing sofr_live → now (core SOFR) …", flush=True)
+            try:
+                update_live_store_to_now(
+                    core_only=True, lookback_days=21, prefer_daily=prefer_daily,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    "  [moves] refresh failed (%s) — using existing store" % exc,
+                    flush=True,
+                )
         ensure_series_in_live_store(list(out_names) + list(st_want))
         data_raw, src = load_panel()
         _, panel, _ = build_panel(data_raw)
-        print("  [moves] src=%s  n=%d  asof=%s" % (src, len(panel), panel.index[-1]), flush=True)
+        print(
+            "  [moves] src=%s  n=%d  asof=%s" % (src, len(panel), panel.index[-1]),
+            flush=True,
+        )
 
     st_names = _structures_with_ussfct(panel, st_want)
 
@@ -213,8 +239,20 @@ def main(argv=None):
     p = argparse.ArgumentParser(description="Period move tables (outrights + structures)")
     p.add_argument("--start", required=True, help='e.g. "10/15/26 09:00"')
     p.add_argument("--end", required=True, help='e.g. "10/16/26 12:00"')
+    p.add_argument(
+        "--no-refresh", action="store_true",
+        help="Skip BBG update; use existing sofr_live.csv only",
+    )
+    p.add_argument(
+        "--daily", action="store_true",
+        help="Prefer daily bdh for the refresh (same path as run_pull_data)",
+    )
     args = p.parse_args(argv)
-    out_tbl, st_tbl, meta, _ = run_period_moves(args.start, args.end)
+    out_tbl, st_tbl, meta, _ = run_period_moves(
+        args.start, args.end,
+        refresh=not args.no_refresh,
+        prefer_daily=args.daily,
+    )
     print("\n=== OUTRIGHTS (bp)  horizon=%s ===" % meta["horizon"], flush=True)
     print(out_tbl.round(3).to_string(index=False), flush=True)
     print("\n=== STRUCTURES / SPREADS (bp) ===", flush=True)

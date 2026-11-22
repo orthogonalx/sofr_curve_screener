@@ -58,9 +58,13 @@ def resolve_tickers(tickers: Sequence[str]) -> List[str]:
         if t is None and re.search(r"\s+(Comdty|Index|Curncy|Equity)\s*$", s, re.I):
             t = s
         if t is None:
+            hint = ""
+            if re.fullmatch(r"USOSFR", s, re.I):
+                hint = " — need tenor, e.g. USOSFR5 or 'USOSFR5 BGN Curncy'"
             raise ValueError(
-                "Unknown ticker %r — add to CROSS_ASSET or pass full BBG "
-                "(e.g. 'CL1 Comdty')" % s
+                "Unknown ticker %r%s — use clean name (USOSFR5 / 5), "
+                "CROSS_ASSET name, or full BBG (e.g. 'USOSFR5 BGN Curncy')"
+                % (s, hint)
             )
         key = t.lower()
         if key not in seen:
