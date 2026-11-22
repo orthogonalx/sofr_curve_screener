@@ -252,6 +252,66 @@ def plot_corr_heatmap(
     return path
 
 
+def plot_corr_heatmap_rho_and_pct(
+    level: pd.DataFrame,
+    percentile: pd.DataFrame,
+    title: str,
+    path: Path,
+    cmap="RdBu_r",
+):
+    """
+    One heatmap: color = ρ (level), cell text = 'ρ\\npXX' (percentile of that ρ).
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("  [corr] matplotlib missing — skip %s" % path, flush=True)
+        return None
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # align
+    cols = [c for c in level.columns if c in percentile.columns]
+    idx = [i for i in level.index if i in percentile.index]
+    if len(cols) < 2:
+        print("  [corr] rho+pct heatmap: need ≥2 cols", flush=True)
+        return None
+    rho = level.loc[idx, cols].to_numpy(dtype=float)
+    pct = percentile.loc[idx, cols].reindex(index=idx, columns=cols).to_numpy(dtype=float)
+
+    fig, ax = plt.subplots(figsize=(max(6, 0.7 * len(cols)), max(5, 0.65 * len(idx))))
+    im = ax.imshow(rho, cmap=cmap, vmin=-1, vmax=1, aspect="auto")
+    ax.set_xticks(range(len(cols)))
+    ax.set_yticks(range(len(idx)))
+    ax.set_xticklabels(cols, rotation=45, ha="right", fontsize=8)
+    ax.set_yticklabels(idx, fontsize=8)
+    for i in range(rho.shape[0]):
+        for j in range(rho.shape[1]):
+            if i == j:
+                continue
+            r, p = rho[i, j], pct[i, j]
+            if not np.isfinite(r):
+                continue
+            if np.isfinite(p):
+                label = "%.2f\np%.0f" % (r, p)
+            else:
+                label = "%.2f" % r
+            ax.text(
+                j, i, label, ha="center", va="center", fontsize=6,
+                color="white" if abs(r) > 0.45 else "black",
+                linespacing=1.05,
+            )
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="ρ")
+    ax.set_title(title, fontsize=10)
+    fig.tight_layout()
+    fig.savefig(path, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    print("  [corr] wrote %s  (ρ color + percentile in cell)" % path, flush=True)
+    return path
+
+
 def _resolve_rates_col(panel: pd.DataFrame, rates: str) -> str:
     if rates in panel.columns:
         return rates

@@ -21,7 +21,6 @@ from curve_config import CURVES, FLIES
 EXTRA_MAP = {
     "ESA": ("ESA Index", "ESA"),
     "CO1": ("CO1 Comdty", "CO1"),
-    "XAU": ("XAU Comdty", "XAU"),
 }
 SPREAD_NAMES = ("USSFCT05", "USSFCT10", "USSFCT30")
 DEFAULT_CSV = "data_11_22.csv"
@@ -90,7 +89,7 @@ def load_csv(path=DEFAULT_CSV, ffill: bool = True) -> pd.DataFrame:
 
 def clean_panel(raw: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
     """
-    Rename/keep USOSFR tenors, USSFCT spreads, ESA/CO1/XAU.
+    Rename/keep USOSFR tenors, USSFCT spreads, ESA/CO1.
     Returns cleaned numeric panel + report dict.
     """
     rename, skipped = {}, []
@@ -370,7 +369,7 @@ def plot_corr_heatmap(
 
 
 def plot_extras_vs_rates(panel: pd.DataFrame, out_dir=OUT_DIR) -> Optional[Path]:
-    """ESA / CO1 / XAU normalized vs 10y rate."""
+    """ESA / CO1 normalized vs 10y rate."""
     extras = [c for c in EXTRA_MAP if c in panel.columns]
     if "10" not in panel.columns or not extras:
         return None
@@ -399,7 +398,7 @@ CSV_CORR_SERIES = ["10", "30", "2s5s", "5s10s", "10s30s", "5s7s10s", "2s5s10s"] 
     SPREAD_NAMES
 ) + list(EXTRA_MAP)
 CORR_EVOL_ANCHORS = ("10", "USSFCT30")
-CORR_EVOL_ASSETS = ("ESA", "CO1", "XAU")  # ESA first
+CORR_EVOL_ASSETS = ("ESA", "CO1")  # ESA first
 
 
 def run_corr_analysis(
@@ -410,7 +409,7 @@ def run_corr_analysis(
 ) -> Dict[str, object]:
     """
     Reuse lib.correlations: level + percentile heatmaps, rolling-corr evolution
-    for 10y & USSFCT30 vs CO1/ESA/XAU, dual scatter, pair scorecard.
+    for 10y & USSFCT30 vs ESA/CO1, dual scatter, pair scorecard.
     """
     from lib import correlations as corr
 
@@ -428,19 +427,31 @@ def run_corr_analysis(
     level.to_csv(out / "corr_level.csv")
     pmat.to_csv(out / "corr_percentile.csv")
 
+    # Main heatmap: color = ρ, cell text = ρ + percentile
+    p_combo = corr.plot_corr_heatmap_rho_and_pct(
+        level,
+        pmat,
+        title=(
+            "Corr ρ (color) + percentile (pXX in cell)  |  window=%d  lookback=%d"
+            % (corr_window, pct_lookback)
+        ),
+        path=out / "corr_heatmap_rho_pct.png",
+    )
     p1 = corr.plot_corr_heatmap(
         level,
-        title="Corr level (last %d bars)" % corr_window,
+        title="Corr level only (last %d bars)" % corr_window,
         path=out / "corr_level_heatmap.png",
         vmin=-1, vmax=1, fmt="%.2f",
     )
     p2 = corr.plot_corr_heatmap(
         pmat,
-        title="Corr percentile (window=%d, lookback=%d) — 100=strongest historically"
+        title="Corr percentile only (window=%d, lookback=%d) — 100=max histórico"
         % (corr_window, pct_lookback),
         path=out / "corr_percentile_heatmap.png",
         vmin=0, vmax=100, fmt="%.0f",
     )
+    if p_combo:
+        paths["corr_heatmap_rho_pct"] = Path(p_combo)
     if p1:
         paths["corr_level_heatmap"] = Path(p1)
     if p2:
@@ -466,7 +477,7 @@ def run_corr_analysis(
         ax.axhline(0, color="k", lw=0.8)
         ax.set_ylim(-1.05, 1.05)
         ax.set_title(
-            "Rolling corr evolution — %s vs oil/ESA/XAU  (window=%d)"
+            "Rolling corr evolution — %s vs ESA / CO1  (window=%d)"
             % (anchor, corr_window)
         )
         ax.set_ylabel("ρ")
@@ -518,24 +529,21 @@ def run_corr_analysis(
         print("  [corr] %s" % score_path.resolve(), flush=True)
         paths["corr_pair_scorecard"] = score_path
 
-    # ── dual scatter: ρ(10, CO1) vs ρ(10, ESA) and vs XAU ─────────────────────
-    if "10" in panel.columns and "CO1" in panel.columns:
-        for y_asset, tag in (("ESA", "esa"), ("XAU", "xau")):
-            if y_asset not in panel.columns:
-                continue
-            try:
-                p = corr.plot_dual_corr_scatter(
-                    panel,
-                    rates="10",
-                    asset_x="CO1",
-                    asset_y=y_asset,
-                    corr_window=corr_window,
-                    path=out / ("corr_scatter_10y_co1_vs_%s.png" % tag),
-                )
-                if p:
-                    paths[Path(p).stem] = Path(p)
-            except Exception as exc:  # noqa: BLE001
-                print("  [corr] scatter 10/CO1/%s failed: %s" % (y_asset, exc), flush=True)
+    # ── dual scatter: ρ(10, ESA) vs ρ(10, CO1) ────────────────────────────────
+    if "10" in panel.columns and "ESA" in panel.columns and "CO1" in panel.columns:
+        try:
+            p = corr.plot_dual_corr_scatter(
+                panel,
+                rates="10",
+                asset_x="ESA",
+                asset_y="CO1",
+                corr_window=corr_window,
+                path=out / "corr_scatter_10y_esa_vs_co1.png",
+            )
+            if p:
+                paths[Path(p).stem] = Path(p)
+        except Exception as exc:  # noqa: BLE001
+            print("  [corr] scatter 10/ESA/CO1 failed: %s" % exc, flush=True)
 
     return {
         "paths": paths,

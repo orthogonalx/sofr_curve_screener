@@ -229,7 +229,6 @@ CROSS_ASSET: List[Tuple[str, str]] = [
     ("USGG10YR", "USGG10YR Index"),
     ("USGG30YR", "USGG30YR Index"),
     ("ESA", "ESA Index"),
-    ("XAU", "XAU Comdty"),
     ("SFRH7", "SFRH7 Comdty"),
     ("SFRH8", "SFRH8 Comdty"),
     ("USSFCT05", "USSFCT05 Curncy"),
@@ -273,7 +272,7 @@ MOVE_OUTRIGHTS: List[str] = ["2", "5", "10", "30"]
 # Curves / flies / spreads / extras (CROSS_ASSET clean names)
 # ESA first — primary risk asset for move tables
 MOVE_STRUCTURES: List[str] = [
-    "ESA", "CO1", "XAU",
+    "ESA", "CO1",
     "2s5s", "5s10s", "10s30s", "2s5s10s", "5s10s30s",
     "USSFCT05", "USSFCT10", "USSFCT30",
 ]
