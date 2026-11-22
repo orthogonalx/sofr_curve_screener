@@ -258,23 +258,18 @@ def run_period_moves(
                     )
                 except Exception as exc:  # noqa: BLE001
                     err = str(exc)
-                    hint = (
-                        "period-moves refresh failed: %s\n"
-                        "Store path: %s  (asof unchanged → still using existing file)\n"
-                        % (exc, store_path)
+                    print(
+                        "  [moves] WARNING: refresh failed — continuing with "
+                        "existing sofr_live.\n           %s" % err,
+                        flush=True,
                     )
                     if "refdata" in err.lower() or "//blp/" in err.lower():
-                        hint += (
-                            "\nBloomberg //blp/refdata is down on this host — "
-                            "bdh/bdib cannot download USOSFR.\n"
-                            "Workaround: set REFRESH = False in the notebook to "
-                            "run period moves on the existing sofr_live "
-                            "(through the last good asof).\n"
-                            "To fix data: restart DataZone/BBG session, then:\n"
-                            "  python run_dz.py pull --tickers 2,5,10,30 "
-                            "--start 20261001 --freq 180\n"
+                        print(
+                            "  [moves] Bloomberg //blp/refdata is down on this host. "
+                            "Period moves will use the last stored asof "
+                            "(no new USOSFR bars until BBG is back).",
+                            flush=True,
                         )
-                    raise RuntimeError(hint) from exc
         ensure_series_in_live_store(list(out_names) + list(st_want))
         data_raw, src = load_panel()
         _, panel, _ = build_panel(data_raw)
