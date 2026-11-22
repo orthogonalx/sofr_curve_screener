@@ -16,6 +16,7 @@ This launcher re-execs under Python 3.7 when needed, then bootstraps packages.
   python run_dz.py report              # refresh 180m + backtest + text report
   python run_dz.py custom --once --pull-history   # CUSTOM_MODELS prediction
   python run_dz.py moves --start "10/15/26 09:00" --end "10/16/26 12:00"
+  python run_dz.py csv-analysis              # offline CSV → panel + charts
 """
 
 from __future__ import annotations
@@ -327,6 +328,8 @@ def main(argv=None) -> None:
         "backtest-verify": "lib/backtest_verify.py",
         "report": "lib/backtest_report.py",
         "backtest-report": "lib/backtest_report.py",
+        "csv-analysis": "lib/csv_analysis.py",
+        "csv": "lib/csv_analysis.py",
     }
     script = mapping.get(cmd)
     if script is None:

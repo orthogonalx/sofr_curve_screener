@@ -229,6 +229,7 @@ CROSS_ASSET: List[Tuple[str, str]] = [
     ("USGG10YR", "USGG10YR Index"),
     ("USGG30YR", "USGG30YR Index"),
     ("ESA", "ESA Index"),
+    ("XAU", "XAU Comdty"),
     ("SFRH7", "SFRH7 Comdty"),
     ("SFRH8", "SFRH8 Comdty"),
     ("USSFCT05", "USSFCT05 Curncy"),
