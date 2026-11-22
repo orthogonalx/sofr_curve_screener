@@ -203,11 +203,24 @@ def run_period_moves(
     st_want = list(structures if structures is not None else MOVE_STRUCTURES)
     do_refresh = REFRESH_ON_RUN if refresh is None else bool(refresh)
     if panel is None:
+        data_before, src_before = load_panel()
+        asof_before = data_before.index[-1] if len(data_before) else None
+        print(
+            "  [moves] store before refresh: src=%s  n=%d  asof=%s"
+            % (src_before, len(data_before), asof_before),
+            flush=True,
+        )
         if do_refresh:
-            print("  [moves] refreshing sofr_live → now (core SOFR) …", flush=True)
+            print(
+                "  [moves] refreshing sofr_live → now (core SOFR, daily=%s) …"
+                % bool(prefer_daily),
+                flush=True,
+            )
             try:
                 update_live_store_to_now(
-                    core_only=True, lookback_days=21, prefer_daily=prefer_daily,
+                    core_only=True,
+                    lookback_days=45,
+                    prefer_daily=prefer_daily,
                 )
             except Exception as exc:  # noqa: BLE001
                 print(
@@ -217,10 +230,18 @@ def run_period_moves(
         ensure_series_in_live_store(list(out_names) + list(st_want))
         data_raw, src = load_panel()
         _, panel, _ = build_panel(data_raw)
+        asof = panel.index[-1] if len(panel) else None
         print(
-            "  [moves] src=%s  n=%d  asof=%s" % (src, len(panel), panel.index[-1]),
+            "  [moves] src=%s  n=%d  asof=%s" % (src, len(panel), asof),
             flush=True,
         )
+        if asof_before is not None and asof is not None and asof <= asof_before:
+            print(
+                "  [moves] WARNING: asof did not advance (%s → %s). "
+                "BBG may have returned no new bars."
+                % (asof_before, asof),
+                flush=True,
+            )
 
     st_names = _structures_with_ussfct(panel, st_want)
 
