@@ -215,15 +215,15 @@ def run_period_moves(
     structures=None,
     panel=None,
     refresh=None,
-    prefer_daily=True,
+    prefer_daily=False,
 ):
     """
     Build outrights + structures move tables between start and end.
     Outrights reported in bp (percent×100). Structures already in bp / BBG units.
 
     refresh (default: REFRESH_DATA_ON_REQUEST): merge-update sofr_live to now
-    for the small ticker set needed by these tables (daily bdh by default —
-    same path as run_pull_data).
+    for the small ticker set needed by these tables. Default prefers bdib
+    (what originally filled sofr_live); set prefer_daily=True to try bdh first.
     """
     out_names = list(outrights if outrights is not None else MOVE_OUTRIGHTS)
     st_want = list(structures if structures is not None else MOVE_STRUCTURES)
@@ -257,16 +257,24 @@ def run_period_moves(
                         require_new=True,
                     )
                 except Exception as exc:  # noqa: BLE001
-                    # Surface the real BBG failure — do not pretend refresh worked.
-                    raise RuntimeError(
+                    err = str(exc)
+                    hint = (
                         "period-moves refresh failed: %s\n"
-                        "Store path: %s\n"
-                        "If run_pull_data works, run:\n"
-                        "  python run_dz.py pull --tickers 2,5,10,30 "
-                        "--start 20261001 --freq 1d --out exports/panels/sofr_patch.csv\n"
-                        "and paste the [bdh] lines here."
+                        "Store path: %s  (asof unchanged → still using existing file)\n"
                         % (exc, store_path)
-                    ) from exc
+                    )
+                    if "refdata" in err.lower() or "//blp/" in err.lower():
+                        hint += (
+                            "\nBloomberg //blp/refdata is down on this host — "
+                            "bdh/bdib cannot download USOSFR.\n"
+                            "Workaround: set REFRESH = False in the notebook to "
+                            "run period moves on the existing sofr_live "
+                            "(through the last good asof).\n"
+                            "To fix data: restart DataZone/BBG session, then:\n"
+                            "  python run_dz.py pull --tickers 2,5,10,30 "
+                            "--start 20261001 --freq 180\n"
+                        )
+                    raise RuntimeError(hint) from exc
         ensure_series_in_live_store(list(out_names) + list(st_want))
         data_raw, src = load_panel()
         _, panel, _ = build_panel(data_raw)
