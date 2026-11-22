@@ -254,12 +254,19 @@ def run_period_moves(
                         securities=secs,
                         lookback_days=60,
                         prefer_daily=prefer_daily,
+                        require_new=True,
                     )
                 except Exception as exc:  # noqa: BLE001
-                    print(
-                        "  [moves] refresh failed (%s) — using existing store" % exc,
-                        flush=True,
-                    )
+                    # Surface the real BBG failure — do not pretend refresh worked.
+                    raise RuntimeError(
+                        "period-moves refresh failed: %s\n"
+                        "Store path: %s\n"
+                        "If run_pull_data works, run:\n"
+                        "  python run_dz.py pull --tickers 2,5,10,30 "
+                        "--start 20261001 --freq 1d --out exports/panels/sofr_patch.csv\n"
+                        "and paste the [bdh] lines here."
+                        % (exc, store_path)
+                    ) from exc
         ensure_series_in_live_store(list(out_names) + list(st_want))
         data_raw, src = load_panel()
         _, panel, _ = build_panel(data_raw)
